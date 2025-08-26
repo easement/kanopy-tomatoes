@@ -1,6 +1,9 @@
 # Kanopy Rotten Tomatoes Scores Chrome Extension
 
 A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatometer and Audience scores) on Kanopy movie pages.
+<img width="1449" height="578" alt="Screenshot 2025-08-26 at 11 10 56 AM" src="https://github.com/user-attachments/assets/640c9573-c8ae-48b0-b7ce-8ca7da9db27f" />
+
+
 
 ## Features
 
