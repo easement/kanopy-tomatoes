@@ -1,7 +1,7 @@
-# Kanopy Rotten Tomatoes Scores Chrome Extension
+# Kanopy Rotten Tomatoes and Letterbox Scores Chrome Extension
 
-A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatometer and Audience scores) on Kanopy movie pages.
-<img width="1449" height="578" alt="Screenshot 2025-08-26 at 11 10 56 AM" src="https://github.com/user-attachments/assets/640c9573-c8ae-48b0-b7ce-8ca7da9db27f" />
+A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatometer and Audience scores) and Letterboxd on Kanopy movie pages.
+<img width="1500" height="506" alt="Screenshot 2025-08-26 at 12 26 59 PM" src="https://github.com/user-attachments/assets/f5ebdf44-6f2b-47ed-adf3-2c5b5dce1668" />
 
 
 
@@ -10,6 +10,7 @@ A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatomet
 - 🎬 **Auto-detection**: Automatically detects movie titles and years from Kanopy pages
 - 🍅 **Tomatometer**: Shows critics' scores from Rotten Tomatoes
 - 🍿 **Audience Score**: Shows audience scores from Rotten Tomatoes
+- 🎞️ **Letterboxd Rating**: Shows the Letterboxd average rating
 - 🔍 **Smart Search**: Uses year matching to find the correct movie when multiple results exist
 - 📱 **Responsive Design**: Beautiful embedded UI that works on all screen sizes
 - 🎨 **Seamless Integration**: Scores appear directly below the movie title
