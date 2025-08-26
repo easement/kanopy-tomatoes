@@ -98,25 +98,74 @@ function showScores(scores, movieInfo) {
     const existing = document.getElementById('rt-scores-embedded');
     if (existing) existing.remove();
     
+    const rtScores = scores.rt;
+    const letterboxdScores = scores.letterboxd;
+    
+    let scoresHtml = '';
+    
+    // Add RT scores if available
+    if (rtScores) {
+        scoresHtml += `
+            <div class="rt-score-section">
+                <div class="rt-score-header">
+                    <span class="rt-icon">🍅</span>
+                    <span class="rt-label">Rotten Tomatoes</span>
+                </div>
+                <div class="rt-score-content">
+                    <div class="rt-score-item">
+                        <span class="rt-score-label">Tomatometer</span>
+                        <span class="rt-score-value critics">${rtScores.critics || 'N/A'}</span>
+                    </div>
+                    <div class="rt-score-item">
+                        <span class="rt-score-label">Audience</span>
+                        <span class="rt-score-value audience">${rtScores.audience || 'N/A'}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Add Letterboxd scores if available
+    if (letterboxdScores) {
+        scoresHtml += `
+            <div class="rt-score-section">
+                <div class="rt-score-header">
+                    <span class="rt-icon">📽️</span>
+                    <span class="rt-label">Letterboxd</span>
+                </div>
+                <div class="rt-score-content">
+                    <div class="rt-score-item">
+                        <span class="rt-score-label">Rating</span>
+                        <span class="rt-score-value letterboxd">${letterboxdScores.rating ? letterboxdScores.rating.toFixed(1) : 'N/A'}</span>
+                    </div>
+                    <div class="rt-score-item empty">
+                        <span class="rt-score-label">&nbsp;</span>
+                        <span class="rt-score-value">&nbsp;</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // If no scores available, show error message
+    if (!rtScores && !letterboxdScores) {
+        scoresHtml = `
+            <div class="rt-score-section">
+                <div class="rt-score-header">
+                    <span class="rt-icon">⚠️</span>
+                    <span class="rt-label">No Scores Available</span>
+                </div>
+                <div class="rt-score-content">
+                    <div class="rt-error-message">Could not find scores on Rotten Tomatoes or Letterboxd</div>
+                </div>
+            </div>
+        `;
+    }
+    
     const div = document.createElement('div');
     div.id = 'rt-scores-embedded';
     div.className = 'rt-scores-container';
-    div.innerHTML = `
-        <div class="rt-scores-header">
-            <span class="rt-icon">🍅</span>
-            <span class="rt-label">Rotten Tomatoes</span>
-        </div>
-        <div class="rt-scores-content">
-            <div class="rt-score-item">
-                <span class="rt-score-label">Tomatometer</span>
-                <span class="rt-score-value critics">${scores.critics || 'N/A'}</span>
-            </div>
-            <div class="rt-score-item">
-                <span class="rt-score-label">Audience</span>
-                <span class="rt-score-value audience">${scores.audience || 'N/A'}</span>
-            </div>
-        </div>
-    `;
+    div.innerHTML = scoresHtml;
     
     // Insert after the title element
     if (movieInfo.titleElement && movieInfo.titleElement.parentNode) {
@@ -135,12 +184,14 @@ function showLoading(movieInfo) {
     div.id = 'rt-scores-embedded';
     div.className = 'rt-scores-container loading';
     div.innerHTML = `
-        <div class="rt-scores-header">
-            <span class="rt-icon">🍅</span>
-            <span class="rt-label">Loading RT Scores...</span>
-        </div>
-        <div class="rt-scores-content">
-            <div class="rt-loading-spinner"></div>
+        <div class="rt-score-section">
+            <div class="rt-score-header">
+                <span class="rt-icon">🍅</span>
+                <span class="rt-label">Loading Movie Scores...</span>
+            </div>
+            <div class="rt-score-content">
+                <div class="rt-loading-spinner"></div>
+            </div>
         </div>
     `;
     
@@ -161,12 +212,14 @@ function showError(message, movieInfo) {
     div.id = 'rt-scores-embedded';
     div.className = 'rt-scores-container error';
     div.innerHTML = `
-        <div class="rt-scores-header">
-            <span class="rt-icon">⚠️</span>
-            <span class="rt-label">RT Scores Unavailable</span>
-        </div>
-        <div class="rt-scores-content">
-            <div class="rt-error-message">${message}</div>
+        <div class="rt-score-section">
+            <div class="rt-score-header">
+                <span class="rt-icon">⚠️</span>
+                <span class="rt-label">Scores Unavailable</span>
+            </div>
+            <div class="rt-score-content">
+                <div class="rt-error-message">${message}</div>
+            </div>
         </div>
     `;
     
@@ -214,6 +267,8 @@ async function run() {
         
         const scores = await getScores(movieInfo.title, movieInfo.year);
         console.log('Scores received:', scores);
+        console.log('RT scores:', scores.rt);
+        console.log('Letterboxd scores:', scores.letterboxd);
         
         showScores(scores, movieInfo);
         

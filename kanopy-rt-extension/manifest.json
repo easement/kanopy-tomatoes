@@ -9,7 +9,9 @@
   ],
   "host_permissions": [
     "https://www.rottentomatoes.com/*",
-    "https://www.kanopy.com/*"
+    "https://www.kanopy.com/*",
+    "https://www.letterboxd.com/*",
+    "https://api.allorigins.win/*"
   ],
   "content_scripts": [
     {

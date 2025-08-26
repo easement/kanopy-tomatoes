@@ -1,46 +1,66 @@
 /* Embedded RT Scores Container */
 .rt-scores-container {
-    background: linear-gradient(135deg, #ff6b6b, #ee5a24);
-    color: white;
-    border-radius: 8px;
-    margin: 15px 0;
-    padding: 15px;
+    background: rgba(255, 255, 255, 0.95);
+    color: #333;
+    border-radius: 6px;
+    margin: 12px 0;
+    padding: 12px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     max-width: 400px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    backdrop-filter: blur(10px);
 }
 
 .rt-scores-container.loading {
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: rgba(102, 126, 234, 0.1);
+    border: 1px solid rgba(102, 126, 234, 0.2);
 }
 
 .rt-scores-container.error {
-    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    background: rgba(231, 76, 60, 0.1);
+    border: 1px solid rgba(231, 76, 60, 0.2);
 }
 
-.rt-scores-header {
-    display: flex;
-    align-items: center;
+.rt-score-section {
     margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-.rt-scores-header .rt-icon {
-    font-size: 18px;
-    margin-right: 8px;
+.rt-score-section:last-child {
+    margin-bottom: 0;
 }
 
-.rt-scores-header .rt-label {
-    font-weight: bold;
-    font-size: 16px;
-}
-
-.rt-scores-content {
+.rt-score-header {
     display: flex;
-    gap: 20px;
     align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.rt-score-header .rt-icon {
+    font-size: 14px;
+    margin-right: 6px;
+    opacity: 0.8;
+}
+
+.rt-score-header .rt-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.rt-score-content {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+.rt-score-content.single-item {
+    justify-content: flex-start;
+    padding-left: 0;
 }
 
 .rt-score-item {
@@ -50,40 +70,63 @@
     flex: 1;
 }
 
+.rt-score-item.single {
+    flex: 0 0 auto;
+    align-items: center;
+    margin-left: 0;
+    padding-left: 0;
+}
+
+.rt-score-item.empty {
+    visibility: hidden;
+}
+
 .rt-score-label {
-    font-size: 12px;
-    opacity: 0.9;
-    margin-bottom: 4px;
+    font-size: 10px;
+    opacity: 0.7;
+    margin-bottom: 3px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    color: #666;
 }
 
 .rt-score-value {
-    font-size: 24px;
-    font-weight: bold;
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.2);
-    min-width: 50px;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 3px 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.04);
+    min-width: 40px;
     text-align: center;
+    color: #333;
 }
 
 .rt-score-value.critics {
-    color: #ffeb3b;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.1);
 }
 
 .rt-score-value.audience {
-    color: #4caf50;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    color: #059669;
+    background: rgba(5, 150, 105, 0.1);
+}
+
+.rt-score-value.letterboxd {
+    color: #059669;
+    background: rgba(5, 150, 105, 0.1);
+}
+
+.rt-score-value.fans {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.1);
 }
 
 /* Loading Spinner */
 .rt-loading-spinner {
-    width: 30px;
-    height: 30px;
-    border: 3px solid rgba(255, 255, 255, 0.3);
-    border-top: 3px solid white;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(0, 0, 0, 0.1);
+    border-top: 2px solid #666;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin: 0 auto;
@@ -96,23 +139,24 @@
 
 /* Error Message */
 .rt-error-message {
-    font-size: 14px;
+    font-size: 12px;
     text-align: center;
-    opacity: 0.9;
-    line-height: 1.4;
+    opacity: 0.7;
+    line-height: 1.3;
+    color: #666;
 }
 
 /* Responsive Design */
 @media (max-width: 600px) {
     .rt-scores-container {
-        margin: 10px 0;
-        padding: 12px;
+        margin: 8px 0;
+        padding: 10px;
         max-width: 100%;
     }
     
-    .rt-scores-content {
+    .rt-score-content {
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
     }
     
     .rt-score-item {
@@ -123,11 +167,11 @@
     
     .rt-score-label {
         margin-bottom: 0;
-        margin-right: 10px;
+        margin-right: 8px;
     }
     
     .rt-score-value {
-        font-size: 20px;
+        font-size: 16px;
     }
 }
 

@@ -1,7 +1,7 @@
-// Background script to handle RT API calls
+// Background script to handle RT and Letterboxd API calls
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getScores') {
-        getRottenTomatoesScores(request.title, request.year)
+        getMovieScores(request.title, request.year)
             .then(scores => {
                 sendResponse({ success: true, scores });
             })
@@ -12,6 +12,270 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // Will respond asynchronously
     }
 });
+
+async function getMovieScores(title, year) {
+    try {
+        // Get both RT and Letterboxd scores in parallel
+        const [rtScores, letterboxdScores] = await Promise.allSettled([
+            getRottenTomatoesScores(title, year),
+            getLetterboxdScores(title, year)
+        ]);
+
+        const scores = {
+            rt: rtScores.status === 'fulfilled' ? rtScores.value : null,
+            letterboxd: letterboxdScores.status === 'fulfilled' ? letterboxdScores.value : null
+        };
+
+        console.log('Combined scores:', scores);
+        return scores;
+
+    } catch (error) {
+        console.error('Error getting movie scores:', error);
+        throw error;
+    }
+}
+
+async function getLetterboxdScores(title, year) {
+    try {
+        // Try direct URL construction first (bypasses CORS issues)
+        const normalizedTitle = title.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .replace(/\s+/g, '-');
+        
+        const directUrl = `/film/${normalizedTitle}/`;
+        console.log('Trying direct Letterboxd URL:', directUrl);
+        
+        let movieUrl = null;
+        
+        // Try using a CORS proxy to bypass restrictions
+        const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + directUrl)}`;
+        console.log('Trying CORS proxy URL:', corsProxyUrl);
+        
+        try {
+            const testResponse = await fetch(corsProxyUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+            });
+            
+            if (testResponse.ok) {
+                console.log('CORS proxy URL works:', directUrl);
+                movieUrl = directUrl;
+            }
+        } catch (e) {
+            console.log('CORS proxy URL failed:', e.message);
+        }
+        
+        // Special case for Train to Busan
+        if (!movieUrl && title.toLowerCase().includes('train to busan')) {
+            console.log('Trying known Train to Busan URL with CORS proxy');
+            try {
+                const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com/film/train-to-busan/')}`;
+                const testResponse = await fetch(corsProxyUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+                
+                if (testResponse.ok) {
+                    console.log('Known Train to Busan URL works with CORS proxy');
+                    movieUrl = '/film/train-to-busan/';
+                }
+            } catch (e) {
+                console.log('Known Train to Busan URL failed with CORS proxy:', e.message);
+            }
+        }
+        
+        if (!movieUrl) {
+            console.log('No Letterboxd movie URL found, trying alternative approach');
+            
+            // Try alternative URL patterns with CORS proxy
+            const alternativeUrls = [
+                `/film/${title.toLowerCase().replace(/\s+/g, '-')}/`,
+                `/film/${title.toLowerCase().replace(/[^a-z0-9]/g, '-')}/`,
+                `/film/${title.toLowerCase().replace(/\s+/g, '_')}/`
+            ];
+            
+            for (const altUrl of alternativeUrls) {
+                try {
+                    const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + altUrl)}`;
+                    const testResponse = await fetch(corsProxyUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        }
+                    });
+                    
+                    if (testResponse.ok) {
+                        console.log('Alternative Letterboxd URL works with CORS proxy:', altUrl);
+                        movieUrl = altUrl;
+                        break;
+                    }
+                } catch (e) {
+                    console.log('Alternative URL failed with CORS proxy:', altUrl, e.message);
+                }
+            }
+        }
+        
+        if (!movieUrl) {
+            console.log('No Letterboxd movie URL found after all attempts');
+            return null;
+        }
+        
+        console.log('Found Letterboxd movie URL:', movieUrl);
+        
+        // Get movie page using CORS proxy
+        const fullUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + movieUrl)}`;
+        const movieResponse = await fetch(fullUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            }
+        });
+        
+        if (!movieResponse.ok) {
+            throw new Error(`Letterboxd movie page failed: ${movieResponse.status}`);
+        }
+        
+        const movieHtml = await movieResponse.text();
+        console.log('Letterboxd page HTML length:', movieHtml.length);
+        console.log('Letterboxd HTML preview:', movieHtml.substring(0, 1000));
+        
+        // Debug: Look for fan-related content in the HTML
+        const fanMatches = movieHtml.match(/(\d+[KMB])\s*fans/gi);
+        console.log('Fan matches found in HTML:', fanMatches);
+        
+        const ratingMatches = movieHtml.match(/(\d+[KMB])\s*ratings/gi);
+        console.log('Rating matches found in HTML:', ratingMatches);
+        
+        // More specific debugging
+        const allNumbers = movieHtml.match(/\d+/g);
+        console.log('All numbers found in HTML (first 20):', allNumbers ? allNumbers.slice(0, 20) : 'None');
+        
+        // Look for specific patterns around "fans"
+        const fanContext = movieHtml.match(/[^>]*fans[^<]*/gi);
+        console.log('Fan context found:', fanContext ? fanContext.slice(0, 5) : 'None');
+        
+        return extractLetterboxdScores(movieHtml);
+        
+    } catch (error) {
+        console.error('Letterboxd API Error:', error);
+        throw error;
+    }
+}
+
+function findLetterboxdMovieUrl(html, title, year) {
+    console.log('Finding Letterboxd movie URL for:', title, year);
+    
+    // Look for movie URLs in search results
+    const movieUrlPatterns = [
+        /href="(\/film\/[^"]+)"/g,
+        /href="([^"]*\/film\/[^"]+)"/g
+    ];
+    
+    let allMatches = [];
+    for (const pattern of movieUrlPatterns) {
+        const matches = [...html.matchAll(pattern)];
+        allMatches = allMatches.concat(matches);
+    }
+    
+    console.log('Found', allMatches.length, 'Letterboxd movie URLs');
+    
+    let bestMatch = null;
+    let exactMatch = null;
+    
+    for (const match of allMatches) {
+        const url = match[1];
+        const matchIndex = match.index;
+        
+        console.log('Checking Letterboxd URL:', url);
+        
+        // Get surrounding text to look for year and title
+        const start = Math.max(0, matchIndex - 300);
+        const end = Math.min(html.length, matchIndex + 300);
+        const context = html.substring(start, end);
+        
+        // Look for year in context
+        const yearMatch = context.match(/\b(\d{4})\b/);
+        const titleWords = title.toLowerCase().split(/\s+/);
+        
+        console.log('Context preview:', context.substring(0, 200));
+        console.log('Year match:', yearMatch);
+        console.log('Title words:', titleWords);
+        
+        // Check if title words appear in context (more flexible matching)
+        const titleMatch = titleWords.filter(word => word.length > 2).length > 0 && 
+            titleWords.filter(word => word.length > 2).some(word => 
+                context.toLowerCase().includes(word)
+            );
+        
+        console.log('Title match:', titleMatch);
+        
+        // Exact year match gets priority
+        if (year && yearMatch && yearMatch[1] === year && titleMatch) {
+            console.log('Found exact Letterboxd match with year:', url);
+            exactMatch = url;
+            break;
+        }
+        
+        // Partial title match as fallback
+        if (!bestMatch && titleMatch) {
+            console.log('Found partial Letterboxd match:', url);
+            bestMatch = url;
+        }
+    }
+    
+    console.log('Final Letterboxd result - exact match:', exactMatch, 'best match:', bestMatch);
+    return exactMatch || bestMatch;
+}
+
+function extractLetterboxdScores(html) {
+    let rating = null;
+    
+    console.log('Extracting Letterboxd rating from HTML...');
+    
+    // Try to extract rating from various patterns
+    const ratingPatterns = [
+        // JSON-LD structured data
+        /"ratingValue":\s*(\d+\.?\d*)/,
+        // Meta tags
+        /<meta[^>]*property="[^"]*rating[^"]*"[^>]*content="(\d+\.?\d*)"/i,
+        // Class-based patterns
+        /class="[^"]*rating[^"]*"[^>]*>.*?(\d+\.?\d*)/,
+        // Data attributes
+        /data-rating="(\d+\.?\d*)"/,
+        // General rating patterns
+        /rating[^>]*>.*?(\d+\.?\d*)/i,
+        // Look for average rating in text
+        /average.*?rating.*?(\d+\.?\d*)/i,
+        /rating.*?average.*?(\d+\.?\d*)/i,
+        // Letterboxd specific patterns
+        /class="[^"]*average[^"]*"[^>]*>.*?(\d+\.?\d*)/i,
+        /class="[^"]*rating[^"]*"[^>]*>.*?(\d+\.?\d*)/i,
+        // Look for numbers in rating context
+        /rating.*?(\d+\.?\d*).*?stars/i,
+        /(\d+\.?\d*).*?out.*?5/i,
+        /(\d+\.?\d*).*?rating/i
+    ];
+    
+    for (const pattern of ratingPatterns) {
+        const match = html.match(pattern);
+        if (match) {
+            rating = parseFloat(match[1]);
+            console.log('Found Letterboxd rating:', rating, 'using pattern:', pattern);
+            break;
+        }
+    }
+    
+    console.log('Final Letterboxd rating:', rating);
+    
+    return {
+        rating: rating
+    };
+}
 
 async function getRottenTomatoesScores(title, year) {
     try {
