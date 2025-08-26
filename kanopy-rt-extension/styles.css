@@ -1,0 +1,78 @@
+.rt-display {
+    position: fixed !important;
+    top: 20px !important;
+    right: 20px !important;
+    width: 220px !important;
+    background: linear-gradient(135deg, #ff6b6b, #ee5a24) !important;
+    color: white !important;
+    border-radius: 10px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+    z-index: 999999 !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    font-size: 14px !important;
+    overflow: hidden !important;
+}
+
+.rt-display.rt-error {
+    background: linear-gradient(135deg, #e74c3c, #c0392b) !important;
+}
+
+.rt-header {
+    background: rgba(0, 0, 0, 0.2) !important;
+    padding: 12px 15px !important;
+    font-weight: bold !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.rt-close {
+    cursor: pointer !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
+    padding: 0 5px !important;
+}
+
+.rt-close:hover {
+    background: rgba(255, 255, 255, 0.2) !important;
+    border-radius: 3px !important;
+}
+
+.rt-content {
+    padding: 15px !important;
+}
+
+.rt-score {
+    display: flex !important;
+    align-items: center !important;
+    margin-bottom: 8px !important;
+}
+
+.rt-score:last-of-type {
+    margin-bottom: 12px !important;
+}
+
+.rt-icon {
+    width: 20px !important;
+    font-size: 16px !important;
+}
+
+.rt-label {
+    flex: 1 !important;
+    margin-left: 5px !important;
+}
+
+.rt-value {
+    font-weight: bold !important;
+    font-size: 16px !important;
+}
+
+.rt-title {
+    font-size: 11px !important;
+    opacity: 0.9 !important;
+    text-align: center !important;
+    padding-top: 8px !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.2) !important;
+    line-height: 1.3 !important;
+}

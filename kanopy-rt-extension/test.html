@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kanopy RT Extension Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-case {
+            border: 1px solid #ddd;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .success { border-color: #4CAF50; background: #f1f8e9; }
+        .error { border-color: #f44336; background: #ffebee; }
+        .info { border-color: #2196F3; background: #e3f2fd; }
+    </style>
+</head>
+<body>
+    <h1>Kanopy RT Extension Test Page</h1>
+    
+    <div class="test-case info">
+        <h3>Test Instructions</h3>
+        <p>This page simulates a Kanopy movie page to test the extension functionality.</p>
+        <p>Expected behavior: The extension should extract "Train to Busan" and "2016" and search for RT scores.</p>
+    </div>
+    
+    <div class="test-case">
+        <h1 class="product-title">Train to Busan (2016)</h1>
+        <p>This is a test movie page that simulates the structure of a Kanopy movie page.</p>
+        <div class="product-meta">
+            <span class="release-year">2016</span>
+        </div>
+    </div>
+    
+    <div class="test-case">
+        <h2>Alternative Title Formats</h2>
+        <h3 class="video-title">Parasite (2019)</h3>
+        <div class="movie-year">2019</div>
+    </div>
+    
+    <div class="test-case">
+        <h2>Another Test Case</h2>
+        <h1 class="hero-title">The Shape of Water - 2017</h1>
+    </div>
+    
+    <script>
+        // Simulate extension loading
+        console.log('Test page loaded');
+        
+        // Check if extension is present
+        setTimeout(() => {
+            const rtButton = document.getElementById('rt-button');
+            if (rtButton) {
+                console.log('✅ Extension button found');
+                document.body.insertAdjacentHTML('beforeend', 
+                    '<div class="test-case success"><h3>✅ Extension Test Passed</h3><p>The extension button was found on the page.</p></div>'
+                );
+            } else {
+                console.log('❌ Extension button not found');
+                document.body.insertAdjacentHTML('beforeend', 
+                    '<div class="test-case error"><h3>❌ Extension Test Failed</h3><p>The extension button was not found. Make sure the extension is loaded.</p></div>'
+                );
+            }
+        }, 3000);
+    </script>
+</body>
+</html>
