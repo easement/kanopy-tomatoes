@@ -97,7 +97,6 @@ kanopy-rt-extension/
 ├── icon16.png             # Extension icon (16x16)
 ├── icon48.png             # Extension icon (48x48)
 ├── icon128.png            # Extension icon (128x128)
-└── README.md              # This file
 ```
 
 ### Key Functions
