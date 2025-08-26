@@ -8,8 +8,9 @@ A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatomet
 - 🍅 **Tomatometer**: Shows critics' scores from Rotten Tomatoes
 - 🍿 **Audience Score**: Shows audience scores from Rotten Tomatoes
 - 🔍 **Smart Search**: Uses year matching to find the correct movie when multiple results exist
-- 🎯 **Manual Trigger**: Click the floating button or use the extension popup to refresh scores
-- 📱 **Responsive Design**: Beautiful UI that works on all screen sizes
+- 📱 **Responsive Design**: Beautiful embedded UI that works on all screen sizes
+- 🎨 **Seamless Integration**: Scores appear directly below the movie title
+- ⚡ **Automatic Loading**: Scores load automatically when you visit a movie page
 
 ## Installation
 
@@ -33,9 +34,7 @@ A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatomet
 2. The extension will automatically:
    - Extract the movie title and year
    - Search Rotten Tomatoes for the movie
-   - Display the scores in a floating overlay
-3. **Manual**: Click the "🍅 RT Scores" button in the top-left corner to refresh scores
-4. **Popup**: Click the extension icon in your browser toolbar for additional controls
+   - Display the scores directly below the movie title
 
 ## How It Works
 
@@ -44,7 +43,7 @@ A Chrome extension that automatically displays Rotten Tomatoes scores (Tomatomet
 3. **RT Search**: Searches Rotten Tomatoes using the movie title
 4. **Year Matching**: Uses the year to find the correct movie when multiple results exist
 5. **Score Extraction**: Parses the Rotten Tomatoes page to extract Tomatometer and Audience scores
-6. **Display**: Shows the scores in a beautiful, non-intrusive overlay
+6. **Display**: Shows the scores in a beautiful, embedded container below the movie title
 
 ## Supported Pages
 

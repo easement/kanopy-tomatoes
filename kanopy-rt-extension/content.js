@@ -91,128 +91,92 @@ function extractMovieInfo() {
     // Clean up title
     title = title.replace(/^\s*[-–—]\s*/, '').replace(/\s*[-–—]\s*$/, '');
     
-    return { title, year };
+    return { title, year, titleElement };
 }
 
 function showScores(scores, movieInfo) {
-    const existing = document.getElementById('rt-scores');
+    const existing = document.getElementById('rt-scores-embedded');
     if (existing) existing.remove();
     
     const div = document.createElement('div');
-    div.id = 'rt-scores';
-    div.className = 'rt-display';
+    div.id = 'rt-scores-embedded';
+    div.className = 'rt-scores-container';
     div.innerHTML = `
-        <div class="rt-header">
-            🍅 Rotten Tomatoes
-            <span class="rt-close" onclick="this.closest('#rt-scores').remove()">×</span>
+        <div class="rt-scores-header">
+            <span class="rt-icon">🍅</span>
+            <span class="rt-label">Rotten Tomatoes</span>
         </div>
-        <div class="rt-content">
-            <div class="rt-score">
-                <span class="rt-icon">🍅</span>
-                <span class="rt-label">Critics:</span>
-                <span class="rt-value">${scores.critics || 'N/A'}</span>
+        <div class="rt-scores-content">
+            <div class="rt-score-item">
+                <span class="rt-score-label">Tomatometer</span>
+                <span class="rt-score-value critics">${scores.critics || 'N/A'}</span>
             </div>
-            <div class="rt-score">
-                <span class="rt-icon">🍿</span>
-                <span class="rt-label">Audience:</span>
-                <span class="rt-value">${scores.audience || 'N/A'}</span>
-            </div>
-            <div class="rt-title">
-                ${movieInfo.title}${movieInfo.year ? ` (${movieInfo.year})` : ''}
+            <div class="rt-score-item">
+                <span class="rt-score-label">Audience</span>
+                <span class="rt-score-value audience">${scores.audience || 'N/A'}</span>
             </div>
         </div>
     `;
-    document.body.appendChild(div);
+    
+    // Insert after the title element
+    if (movieInfo.titleElement && movieInfo.titleElement.parentNode) {
+        movieInfo.titleElement.parentNode.insertBefore(div, movieInfo.titleElement.nextSibling);
+    } else {
+        // Fallback: insert at the top of the page
+        document.body.insertBefore(div, document.body.firstChild);
+    }
 }
 
-function showLoading() {
-    const existing = document.getElementById('rt-scores');
+function showLoading(movieInfo) {
+    const existing = document.getElementById('rt-scores-embedded');
     if (existing) existing.remove();
     
     const div = document.createElement('div');
-    div.id = 'rt-scores';
-    div.className = 'rt-display';
+    div.id = 'rt-scores-embedded';
+    div.className = 'rt-scores-container loading';
     div.innerHTML = `
-        <div class="rt-header">
-            🍅 Loading RT Scores...
-            <span class="rt-close" onclick="this.closest('#rt-scores').remove()">×</span>
+        <div class="rt-scores-header">
+            <span class="rt-icon">🍅</span>
+            <span class="rt-label">Loading RT Scores...</span>
         </div>
-        <div class="rt-content">
-            <div style="text-align: center; padding: 20px;">
-                <div style="font-size: 24px; margin-bottom: 10px;">🍅</div>
-                <div>Searching for scores...</div>
-            </div>
+        <div class="rt-scores-content">
+            <div class="rt-loading-spinner"></div>
         </div>
     `;
-    document.body.appendChild(div);
+    
+    // Insert after the title element
+    if (movieInfo.titleElement && movieInfo.titleElement.parentNode) {
+        movieInfo.titleElement.parentNode.insertBefore(div, movieInfo.titleElement.nextSibling);
+    } else {
+        // Fallback: insert at the top of the page
+        document.body.insertBefore(div, document.body.firstChild);
+    }
 }
 
-function showError(message) {
-    const existing = document.getElementById('rt-scores');
+function showError(message, movieInfo) {
+    const existing = document.getElementById('rt-scores-embedded');
     if (existing) existing.remove();
     
     const div = document.createElement('div');
-    div.id = 'rt-scores';
-    div.className = 'rt-display rt-error';
+    div.id = 'rt-scores-embedded';
+    div.className = 'rt-scores-container error';
     div.innerHTML = `
-        <div class="rt-header">
-            ⚠️ RT Error
-            <span class="rt-close" onclick="this.closest('#rt-scores').remove()">×</span>
+        <div class="rt-scores-header">
+            <span class="rt-icon">⚠️</span>
+            <span class="rt-label">RT Scores Unavailable</span>
         </div>
-        <div class="rt-content">
-            <div style="margin-bottom: 10px;">${message}</div>
-            <div style="font-size: 12px; opacity: 0.8;">
-                Try refreshing the page or check if the movie exists on Rotten Tomatoes.
-            </div>
+        <div class="rt-scores-content">
+            <div class="rt-error-message">${message}</div>
         </div>
     `;
-    document.body.appendChild(div);
     
-    setTimeout(() => {
-        const errorDiv = document.getElementById('rt-scores');
-        if (errorDiv) errorDiv.remove();
-    }, 8000);
-}
-
-function addRTButton() {
-    // Remove existing button if any
-    const existingButton = document.getElementById('rt-button');
-    if (existingButton) existingButton.remove();
-    
-    const button = document.createElement('button');
-    button.id = 'rt-button';
-    button.innerHTML = '🍅 RT Scores';
-    button.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 20px;
-        background: linear-gradient(135deg, #ff6b6b, #ee5a24);
-        color: white;
-        border: none;
-        border-radius: 25px;
-        padding: 10px 20px;
-        font-size: 14px;
-        font-weight: bold;
-        cursor: pointer;
-        z-index: 999998;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-        transition: all 0.3s ease;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    `;
-    
-    button.addEventListener('mouseenter', () => {
-        button.style.transform = 'scale(1.05)';
-        button.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)';
-    });
-    
-    button.addEventListener('mouseleave', () => {
-        button.style.transform = 'scale(1)';
-        button.style.boxShadow = '0 4px 15px rgba(0,0,0,0.3)';
-    });
-    
-    button.addEventListener('click', run);
-    
-    document.body.appendChild(button);
+    // Insert after the title element
+    if (movieInfo.titleElement && movieInfo.titleElement.parentNode) {
+        movieInfo.titleElement.parentNode.insertBefore(div, movieInfo.titleElement.nextSibling);
+    } else {
+        // Fallback: insert at the top of the page
+        document.body.insertBefore(div, document.body.firstChild);
+    }
 }
 
 async function getScores(title, year) {
@@ -242,11 +206,11 @@ async function run() {
         console.log('Movie info:', movieInfo);
         
         if (!movieInfo || !movieInfo.title) {
-            showError('Could not find movie title on this page. Please make sure you are on a movie page.');
+            showError('Could not find movie title on this page. Please make sure you are on a movie page.', movieInfo);
             return;
         }
         
-        showLoading();
+        showLoading(movieInfo);
         
         const scores = await getScores(movieInfo.title, movieInfo.year);
         console.log('Scores received:', scores);
@@ -255,7 +219,7 @@ async function run() {
         
     } catch (error) {
         console.error('Extension error:', error);
-        showError(error.message);
+        showError(error.message, movieInfo);
     }
 }
 
@@ -263,14 +227,12 @@ async function run() {
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
-            addRTButton();
             // Auto-run after a short delay
             setTimeout(run, 2000);
         }, 1000);
     });
 } else {
     setTimeout(() => {
-        addRTButton();
         // Auto-run after a short delay
         setTimeout(run, 2000);
     }, 1000);
@@ -283,7 +245,6 @@ new MutationObserver(() => {
     if (url !== lastUrl) {
         lastUrl = url;
         setTimeout(() => {
-            addRTButton();
             setTimeout(run, 2000);
         }, 1000);
     }

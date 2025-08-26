@@ -1,3 +1,137 @@
+/* Embedded RT Scores Container */
+.rt-scores-container {
+    background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+    color: white;
+    border-radius: 8px;
+    margin: 15px 0;
+    padding: 15px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    max-width: 400px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.rt-scores-container.loading {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+}
+
+.rt-scores-container.error {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+}
+
+.rt-scores-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.rt-scores-header .rt-icon {
+    font-size: 18px;
+    margin-right: 8px;
+}
+
+.rt-scores-header .rt-label {
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.rt-scores-content {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.rt-score-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+}
+
+.rt-score-label {
+    font-size: 12px;
+    opacity: 0.9;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.rt-score-value {
+    font-size: 24px;
+    font-weight: bold;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    min-width: 50px;
+    text-align: center;
+}
+
+.rt-score-value.critics {
+    color: #ffeb3b;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.rt-score-value.audience {
+    color: #4caf50;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Loading Spinner */
+.rt-loading-spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top: 3px solid white;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Error Message */
+.rt-error-message {
+    font-size: 14px;
+    text-align: center;
+    opacity: 0.9;
+    line-height: 1.4;
+}
+
+/* Responsive Design */
+@media (max-width: 600px) {
+    .rt-scores-container {
+        margin: 10px 0;
+        padding: 12px;
+        max-width: 100%;
+    }
+    
+    .rt-scores-content {
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .rt-score-item {
+        flex-direction: row;
+        justify-content: space-between;
+        width: 100%;
+    }
+    
+    .rt-score-label {
+        margin-bottom: 0;
+        margin-right: 10px;
+    }
+    
+    .rt-score-value {
+        font-size: 20px;
+    }
+}
+
+/* Legacy styles for backward compatibility */
 .rt-display {
     position: fixed !important;
     top: 20px !important;
