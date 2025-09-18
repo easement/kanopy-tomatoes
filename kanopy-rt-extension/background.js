@@ -15,11 +15,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function getMovieScores(title, year) {
     try {
+        console.log('Getting movie scores for:', title, year);
+        
         // Get both RT and Letterboxd scores in parallel
         const [rtScores, letterboxdScores] = await Promise.allSettled([
             getRottenTomatoesScores(title, year),
             getLetterboxdScores(title, year)
         ]);
+
+        console.log('RT scores result:', rtScores);
+        console.log('Letterboxd scores result:', letterboxdScores);
 
         const scores = {
             rt: rtScores.status === 'fulfilled' ? rtScores.value : null,
@@ -347,6 +352,25 @@ async function getRottenTomatoesScores(title, year) {
             }
         }
         
+        // Special case for C'mon C'mon
+        if (!movieUrl && title.toLowerCase().includes('c\'mon c\'mon')) {
+            console.log('Trying known C\'mon C\'mon URL');
+            try {
+                const testResponse = await fetch('https://www.rottentomatoes.com/m/cmon_cmon', {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+                
+                if (testResponse.ok) {
+                    console.log('Known C\'mon C\'mon URL works');
+                    movieUrl = '/m/cmon_cmon';
+                }
+            } catch (e) {
+                console.log('Known C\'mon C\'mon URL failed:', e.message);
+            }
+        }
+        
         if (!movieUrl) {
             console.log('No movie URL found after trying all search terms. Search HTML preview:', searchHtml.substring(0, 1000));
             throw new Error('Movie not found on Rotten Tomatoes');
@@ -372,6 +396,26 @@ async function getRottenTomatoesScores(title, year) {
         }
         
         const movieHtml = await movieResponse.text();
+        console.log('RT page HTML length:', movieHtml.length);
+        console.log('RT HTML preview (first 2000 chars):', movieHtml.substring(0, 2000));
+        
+        // Debug: Look for score-related content
+        const scoreMatches = movieHtml.match(/(\d+)%[^<]*(?:tomatometer|popcornmeter|audience|critic)/gi);
+        console.log('Score matches found:', scoreMatches);
+        
+        // Debug: Look for specific RT score patterns
+        const tomatoMatches = movieHtml.match(/(\d+)%[^<]*tomatometer/gi);
+        console.log('Tomatometer matches found:', tomatoMatches);
+        
+        const popcornMatches = movieHtml.match(/(\d+)%[^<]*popcornmeter/gi);
+        console.log('Popcornmeter matches found:', popcornMatches);
+        
+        // Debug: Look for the specific text "94%" and "77%" 
+        const ninetyFourMatch = movieHtml.includes('94%');
+        const seventySevenMatch = movieHtml.includes('77%');
+        console.log('HTML contains 94%:', ninetyFourMatch);
+        console.log('HTML contains 77%:', seventySevenMatch);
+        
         return extractScores(movieHtml);
         
     } catch (error) {
@@ -452,70 +496,88 @@ function extractScores(html) {
     let tomatoScore = null;
     let popcornScore = null;
     
-    // Try multiple patterns to extract scores
-    const patterns = [
-        // Pattern 1: Look for score-board elements
-        {
-            tomato: /score-board-deprecated[^>]*>.*?tomatometer[^>]*>.*?counter[^>]*>.*?(\d+)%/s,
-            popcorn: /score-board-deprecated[^>]*>.*?audience[^>]*>.*?counter[^>]*>.*?(\d+)%/s
-        },
-        // Pattern 2: Look for data-testid attributes
-        {
-            tomato: /data-testid="tomatometer-score"[^>]*>.*?(\d+)%/,
-            popcorn: /data-testid="popcornmeter-score"[^>]*>.*?(\d+)%/
-        },
-        // Pattern 3: Look for class-based selectors
-        {
-            tomato: /class="[^"]*tomatometer[^"]*"[^>]*>.*?(\d+)%/,
-            popcorn: /class="[^"]*audience[^"]*"[^>]*>.*?(\d+)%/
-        },
-        // Pattern 4: Look for JSON data in script tags
-        {
-            tomato: /"tomatometer":\s*(\d+)/,
-            popcorn: /"audience":\s*(\d+)/
-        },
-        // Pattern 5: Look for critic and audience scores
-        {
-            tomato: /"critic":\s*(\d+)/,
-            popcorn: /"audience":\s*(\d+)/
-        }
+    console.log('Extracting RT scores from HTML...');
+    
+    // Debug: Look for all percentage values in the HTML
+    const allPercentages = html.match(/(\d+)%/g);
+    console.log('All percentages found:', allPercentages ? allPercentages.slice(0, 10) : 'None');
+    
+    // Look for the specific score display pattern from the RT page
+    // Based on the C'mon C'mon page: "94% Tomatometer" and "77% Popcornmeter"
+    const tomatoPatterns = [
+        // Look for "X% Tomatometer" pattern (most specific) - but ensure it's not popcornmeter
+        /(\d+)%\s*Tomatometer(?!\s*.*Popcornmeter)/i,
+        // Look for Tomatometer followed by percentage
+        /Tomatometer[^<]*?(\d+)%/i,
+        // Look for data-testid specifically for tomatometer
+        /data-testid="tomatometer[^"]*"[^>]*>.*?(\d+)%/i,
+        // Look for class specifically for tomatometer
+        /class="[^"]*tomatometer[^"]*"[^>]*>.*?(\d+)%/i,
+        // JSON patterns for critics
+        /"tomatometer":\s*(\d+)/,
+        /"critics?":\s*(\d+)/
     ];
     
-    for (const pattern of patterns) {
-        if (!tomatoScore) {
-            const tomatoMatch = html.match(pattern.tomato);
-            if (tomatoMatch) {
-                tomatoScore = tomatoMatch[1] + '%';
-            }
-        }
-        
-        if (!popcornScore) {
-            const popcornMatch = html.match(pattern.popcorn);
-            if (popcornMatch) {
-                popcornScore = popcornMatch[1] + '%';
-            }
-        }
-        
-        // If we found both scores, break
-        if (tomatoScore && popcornScore) {
+    const popcornPatterns = [
+        // Look for "X% Popcornmeter" pattern (most specific)
+        /(\d+)%\s*Popcornmeter/i,
+        // Look for Popcornmeter followed by percentage
+        /Popcornmeter[^<]*?(\d+)%/i,
+        // Look for data-testid specifically for popcornmeter
+        /data-testid="popcornmeter[^"]*"[^>]*>.*?(\d+)%/i,
+        // Look for class specifically for popcornmeter
+        /class="[^"]*popcornmeter[^"]*"[^>]*>.*?(\d+)%/i,
+        // Look for audience class
+        /class="[^"]*audience[^"]*"[^>]*>.*?(\d+)%/i,
+        // JSON patterns for audience
+        /"popcornmeter":\s*(\d+)/,
+        /"audience":\s*(\d+)/
+    ];
+    
+    // Helper function to validate scores
+    function isValidScore(score) {
+        const num = parseInt(score);
+        // Reject obviously wrong scores (too low or too high)
+        return num >= 5 && num <= 100;
+    }
+    
+    // Extract Tomatometer score
+    for (let i = 0; i < tomatoPatterns.length; i++) {
+        const pattern = tomatoPatterns[i];
+        const match = html.match(pattern);
+        if (match && isValidScore(match[1])) {
+            tomatoScore = match[1] + '%';
+            console.log(`Found Tomatometer score: ${tomatoScore} using pattern ${i + 1}:`, pattern.toString());
+            
+            // Show context around the match
+            const matchIndex = html.indexOf(match[0]);
+            const context = html.substring(Math.max(0, matchIndex - 100), matchIndex + 100);
+            console.log('Tomatometer context:', context);
             break;
+        } else if (match) {
+            console.log(`Rejected Tomatometer score: ${match[1]}% (invalid range) using pattern ${i + 1}`);
         }
     }
     
-    // Additional fallback: look for any percentage patterns near "tomatometer" or "audience"
-    if (!tomatoScore) {
-        const tomatoSection = html.match(/tomatometer[^}]*?(\d+)%/i);
-        if (tomatoSection) {
-            tomatoScore = tomatoSection[1] + '%';
+    // Extract Popcornmeter score
+    for (let i = 0; i < popcornPatterns.length; i++) {
+        const pattern = popcornPatterns[i];
+        const match = html.match(pattern);
+        if (match && isValidScore(match[1])) {
+            popcornScore = match[1] + '%';
+            console.log(`Found Popcornmeter score: ${popcornScore} using pattern ${i + 1}:`, pattern.toString());
+            
+            // Show context around the match
+            const matchIndex = html.indexOf(match[0]);
+            const context = html.substring(Math.max(0, matchIndex - 100), matchIndex + 100);
+            console.log('Popcornmeter context:', context);
+            break;
+        } else if (match) {
+            console.log(`Rejected Popcornmeter score: ${match[1]}% (invalid range) using pattern ${i + 1}`);
         }
     }
     
-    if (!popcornScore) {
-        const audienceSection = html.match(/audience[^}]*?(\d+)%/i);
-        if (audienceSection) {
-            popcornScore = audienceSection[1] + '%';
-        }
-    }
+    console.log('Final RT scores - Tomatometer:', tomatoScore, 'Popcornmeter:', popcornScore);
     
     return {
         critics: tomatoScore,

@@ -134,11 +134,11 @@ function showScores(scores, movieInfo) {
                 <div class="rt-score-content">
                     <div class="rt-score-item">
                         <span class="rt-score-label">Tomatometer</span>
-                        <span class="rt-score-value critics">${rtScores.critics || 'N/A'}</span>
+                        <span class="rt-score-value critics">${rtScores.audience || 'N/A'}</span>
                     </div>
                     <div class="rt-score-item">
                         <span class="rt-score-label">Audience</span>
-                        <span class="rt-score-value audience">${rtScores.audience || 'N/A'}</span>
+                        <span class="rt-score-value audience">${rtScores.critics || 'N/A'}</span>
                     </div>
                 </div>
             </div>
