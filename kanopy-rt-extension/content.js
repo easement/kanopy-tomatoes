@@ -94,12 +94,30 @@ function extractMovieInfo() {
     return { title, year, titleElement };
 }
 
+function generateRTUrl(title, year) {
+    // Generate Rotten Tomatoes search URL
+    return `https://www.rottentomatoes.com/search?search=${encodeURIComponent(title)}`;
+}
+
+function generateLetterboxdUrl(title, year) {
+    // Try to generate direct Letterboxd URL
+    const normalizedTitle = title.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+/g, '-');
+    
+    return `https://letterboxd.com/film/${normalizedTitle}/`;
+}
+
 function showScores(scores, movieInfo) {
     const existing = document.getElementById('rt-scores-embedded');
     if (existing) existing.remove();
     
     const rtScores = scores.rt;
     const letterboxdScores = scores.letterboxd;
+    
+    // Generate URLs for linking
+    const rtUrl = generateRTUrl(movieInfo.title, movieInfo.year);
+    const letterboxdUrl = generateLetterboxdUrl(movieInfo.title, movieInfo.year);
     
     let scoresHtml = '';
     
@@ -109,7 +127,9 @@ function showScores(scores, movieInfo) {
             <div class="rt-score-section">
                 <div class="rt-score-header">
                     <span class="rt-icon">🍅</span>
-                    <span class="rt-label">Rotten Tomatoes</span>
+                    <a href="${rtUrl}" target="_blank" class="rt-label-link">
+                        <span class="rt-label">Rotten Tomatoes</span>
+                    </a>
                 </div>
                 <div class="rt-score-content">
                     <div class="rt-score-item">
@@ -131,7 +151,9 @@ function showScores(scores, movieInfo) {
             <div class="rt-score-section">
                 <div class="rt-score-header">
                     <span class="rt-icon">📽️</span>
-                    <span class="rt-label">Letterboxd</span>
+                    <a href="${letterboxdUrl}" target="_blank" class="rt-label-link">
+                        <span class="rt-label">Letterboxd</span>
+                    </a>
                 </div>
                 <div class="rt-score-content">
                     <div class="rt-score-item">

@@ -52,6 +52,21 @@
     letter-spacing: 0.5px;
 }
 
+.rt-label-link {
+    text-decoration: none;
+    color: inherit;
+    transition: opacity 0.3s ease;
+}
+
+.rt-label-link:hover {
+    opacity: 0.7;
+    text-decoration: underline;
+}
+
+.rt-label-link:visited {
+    color: inherit;
+}
+
 .rt-score-content {
     display: flex;
     gap: 16px;
