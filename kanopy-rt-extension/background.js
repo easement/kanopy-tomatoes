@@ -42,13 +42,18 @@ async function getMovieScores(title, year) {
 
 async function getLetterboxdScores(title, year) {
     try {
+        console.log('getLetterboxdScores called with title:', title, 'year:', year);
+        
         // Try direct URL construction first (bypasses CORS issues)
         const normalizedTitle = title.toLowerCase()
             .replace(/[^a-z0-9\s]/g, '')
             .replace(/\s+/g, '-');
         
-        const directUrl = `/film/${normalizedTitle}/`;
-        console.log('Trying direct Letterboxd URL:', directUrl);
+        console.log('Normalized title:', normalizedTitle);
+        
+        // Include year in the URL for movies with common titles
+        const directUrl = year ? `/film/${normalizedTitle}-${year}/` : `/film/${normalizedTitle}/`;
+        console.log('Constructed direct URL:', directUrl);
         
         let movieUrl = null;
         
@@ -149,21 +154,48 @@ async function getLetterboxdScores(title, year) {
         console.log('Letterboxd page HTML length:', movieHtml.length);
         console.log('Letterboxd HTML preview:', movieHtml.substring(0, 1000));
         
-        // Debug: Look for fan-related content in the HTML
-        const fanMatches = movieHtml.match(/(\d+[KMB])\s*fans/gi);
-        console.log('Fan matches found in HTML:', fanMatches);
+        // Check if the page uses lazy loading for ratings
+        const lazyLoadMatch = movieHtml.match(/data-src="([^"]*ratings-summary[^"]*)"/);
+        if (lazyLoadMatch) {
+            console.log('Found lazy-loaded ratings endpoint:', lazyLoadMatch[1]);
+            
+            // Fix the slug to match the actual movie URL
+            // Convert movieUrl like "/film/share-2023/" to correct ratings URL
+            // Remove trailing slash first, then add the ratings-summary path
+            const cleanMovieUrl = movieUrl.replace(/\/$/, '');
+            const correctRatingsUrl = cleanMovieUrl.replace('/film/', '/csi/film/') + '/ratings-summary/';
+            console.log('Movie URL:', movieUrl);
+            console.log('Clean movie URL:', cleanMovieUrl);
+            console.log('Corrected ratings URL:', correctRatingsUrl);
+            
+            // Fetch the ratings summary separately
+            try {
+                const ratingsUrl = `https://letterboxd.com${correctRatingsUrl}`;
+                const corsRatingsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(ratingsUrl)}`;
+                console.log('Fetching ratings summary from:', corsRatingsUrl);
+                
+                const ratingsResponse = await fetch(corsRatingsUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+                
+                if (ratingsResponse.ok) {
+                    const ratingsHtml = await ratingsResponse.text();
+                    console.log('Ratings summary HTML length:', ratingsHtml.length);
+                    console.log('Ratings summary preview:', ratingsHtml.substring(0, 500));
+                    
+                    // Extract rating from the ratings summary
+                    return extractLetterboxdScores(ratingsHtml);
+                } else {
+                    console.log('Ratings summary request failed:', ratingsResponse.status);
+                }
+            } catch (e) {
+                console.log('Error fetching ratings summary:', e.message);
+            }
+        }
         
-        const ratingMatches = movieHtml.match(/(\d+[KMB])\s*ratings/gi);
-        console.log('Rating matches found in HTML:', ratingMatches);
-        
-        // More specific debugging
-        const allNumbers = movieHtml.match(/\d+/g);
-        console.log('All numbers found in HTML (first 20):', allNumbers ? allNumbers.slice(0, 20) : 'None');
-        
-        // Look for specific patterns around "fans"
-        const fanContext = movieHtml.match(/[^>]*fans[^<]*/gi);
-        console.log('Fan context found:', fanContext ? fanContext.slice(0, 5) : 'None');
-        
+        // Fallback to extracting from main page if lazy loading fails
         return extractLetterboxdScores(movieHtml);
         
     } catch (error) {
@@ -242,36 +274,159 @@ function extractLetterboxdScores(html) {
     
     console.log('Extracting Letterboxd rating from HTML...');
     
-    // Try to extract rating from various patterns
-    const ratingPatterns = [
-        // JSON-LD structured data
-        /"ratingValue":\s*(\d+\.?\d*)/,
-        // Meta tags
-        /<meta[^>]*property="[^"]*rating[^"]*"[^>]*content="(\d+\.?\d*)"/i,
-        // Class-based patterns
-        /class="[^"]*rating[^"]*"[^>]*>.*?(\d+\.?\d*)/,
-        // Data attributes
-        /data-rating="(\d+\.?\d*)"/,
-        // General rating patterns
-        /rating[^>]*>.*?(\d+\.?\d*)/i,
-        // Look for average rating in text
-        /average.*?rating.*?(\d+\.?\d*)/i,
-        /rating.*?average.*?(\d+\.?\d*)/i,
-        // Letterboxd specific patterns
-        /class="[^"]*average[^"]*"[^>]*>.*?(\d+\.?\d*)/i,
-        /class="[^"]*rating[^"]*"[^>]*>.*?(\d+\.?\d*)/i,
-        // Look for numbers in rating context
-        /rating.*?(\d+\.?\d*).*?stars/i,
-        /(\d+\.?\d*).*?out.*?5/i,
-        /(\d+\.?\d*).*?rating/i
-    ];
+    // Helper function to validate Letterboxd ratings
+    function isValidLetterboxdRating(rating) {
+        const num = parseFloat(rating);
+        // Letterboxd ratings are 0.5 to 5.0
+        return num >= 0.5 && num <= 5.0;
+    }
     
-    for (const pattern of ratingPatterns) {
-        const match = html.match(pattern);
-        if (match) {
-            rating = parseFloat(match[1]);
-            console.log('Found Letterboxd rating:', rating, 'using pattern:', pattern);
-            break;
+    // Debug: Look for all decimal numbers in the HTML
+    const allDecimals = html.match(/(\d+\.\d+)/g);
+    console.log('All decimal numbers found:', allDecimals ? allDecimals.slice(0, 10) : 'None');
+    
+    // Debug: Look specifically for "2.8" in the HTML
+    const containsRating = html.includes('2.8');
+    console.log('HTML contains "2.8":', containsRating);
+    
+    // Debug: Find all occurrences of "2.8" and their context
+    if (containsRating) {
+        const regex = /2\.8/g;
+        const matches = [];
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+            const context = html.substring(Math.max(0, match.index - 100), match.index + 100);
+            matches.push({
+                index: match.index,
+                context: context
+            });
+        }
+        console.log('All "2.8" occurrences and contexts:', matches);
+    }
+    
+    // Debug: Look for rating-related text
+    const ratingText = html.match(/[^>]*rating[^<]*/gi);
+    console.log('Rating text found:', ratingText ? ratingText.slice(0, 5) : 'None');
+    
+    // Try multiple specific approaches to find the correct rating
+    
+    // Approach 1: Look for structured data rating value
+    console.log('Approach 1: Structured data');
+    const structuredRating = html.match(/"ratingValue":\s*(\d+\.?\d*)/);
+    if (structuredRating && isValidLetterboxdRating(structuredRating[1])) {
+        rating = parseFloat(structuredRating[1]);
+        console.log('Found rating from structured data:', rating);
+    }
+    
+    // Approach 2: Look for meta tag rating
+    if (!rating) {
+        console.log('Approach 2: Meta tags');
+        const metaRating = html.match(/<meta[^>]*property="[^"]*rating[^"]*"[^>]*content="(\d+\.?\d*)"/i);
+        if (metaRating && isValidLetterboxdRating(metaRating[1])) {
+            rating = parseFloat(metaRating[1]);
+            console.log('Found rating from meta tag:', rating);
+        }
+    }
+    
+    // Approach 3: Look for all valid decimal numbers and test each one
+    if (!rating) {
+        console.log('Approach 3: Testing all valid decimal numbers');
+        const allValidDecimals = [];
+        const decimalMatches = html.matchAll(/(\d\.\d+)/g);
+        
+        for (const match of decimalMatches) {
+            const num = parseFloat(match[1]);
+            if (isValidLetterboxdRating(match[1])) {
+                allValidDecimals.push({
+                    value: num,
+                    context: html.substring(Math.max(0, match.index - 50), match.index + 50)
+                });
+            }
+        }
+        
+        console.log('All valid decimal ratings found:', allValidDecimals);
+        
+        // If we have valid decimals, try to find the most likely rating
+        if (allValidDecimals.length > 0) {
+            // Look for the one in the best context
+            for (const decimal of allValidDecimals) {
+                const context = decimal.context.toLowerCase();
+                if (context.includes('rating') || context.includes('average') || context.includes('stars')) {
+                    rating = decimal.value;
+                    console.log('Found rating from context analysis:', rating, 'Context:', decimal.context);
+                    break;
+                }
+            }
+            
+            // If no context match, take the first valid one
+            if (!rating) {
+                rating = allValidDecimals[0].value;
+                console.log('Using first valid decimal as rating:', rating);
+            }
+        }
+    }
+    
+    // Approach 4: Look for specific rating display patterns
+    if (!rating) {
+        console.log('Approach 4: Specific display patterns');
+        const displayPatterns = [
+            /class="[^"]*rating[^"]*"[^>]*>.*?(\d\.\d+)/i,
+            /data-rating="(\d\.\d+)"/i,
+            /title="(\d\.\d+)[^"]*rating/i,
+            /(\d\.\d+)[^<]*out of 5/i
+        ];
+        
+        for (let i = 0; i < displayPatterns.length; i++) {
+            const match = html.match(displayPatterns[i]);
+            if (match && isValidLetterboxdRating(match[1])) {
+                rating = parseFloat(match[1]);
+                console.log(`Found rating from display pattern ${i + 1}:`, rating);
+                break;
+            }
+        }
+    }
+    
+    // Approach 5: Target the specific display-rating link structure
+    if (!rating) {
+        console.log('Approach 5: Targeting display-rating link');
+        // Target: <a href="/film/share-2023/ratings/" class="tooltip display-rating" data-original-title="..."> 2.8 </a>
+        const displayRatingPattern = /<a[^>]*class="[^"]*display-rating[^"]*"[^>]*>\s*(\d+\.\d+)\s*<\/a>/i;
+        const displayMatch = html.match(displayRatingPattern);
+        
+        if (displayMatch && isValidLetterboxdRating(displayMatch[1])) {
+            rating = parseFloat(displayMatch[1]);
+            console.log('Found rating from display-rating link:', rating);
+            
+            // Show the full match for verification
+            console.log('Full display-rating match:', displayMatch[0]);
+        } else if (displayMatch) {
+            console.log('Found display-rating link but invalid rating:', displayMatch[1]);
+        } else {
+            console.log('No display-rating link found');
+            
+            // Debug: Look for any display-rating elements
+            const anyDisplayRating = html.match(/display-rating[^>]*>/i);
+            if (anyDisplayRating) {
+                console.log('Found display-rating element but no rating:', anyDisplayRating[0]);
+            }
+        }
+    }
+    
+    // Approach 6: Broader search for the display-rating structure
+    if (!rating) {
+        console.log('Approach 6: Broader display-rating search');
+        // More flexible pattern for the display-rating structure
+        const flexibleDisplayPattern = /<a[^>]*display-rating[^>]*>[\s\S]*?(\d+\.\d+)[\s\S]*?<\/a>/i;
+        const flexibleMatch = html.match(flexibleDisplayPattern);
+        
+        if (flexibleMatch && isValidLetterboxdRating(flexibleMatch[1])) {
+            rating = parseFloat(flexibleMatch[1]);
+            console.log('Found rating from flexible display-rating pattern:', rating);
+            console.log('Flexible match:', flexibleMatch[0]);
+        } else if (flexibleMatch) {
+            console.log('Found flexible display-rating but invalid rating:', flexibleMatch[1]);
+        } else {
+            console.log('No flexible display-rating found');
         }
     }
     
