@@ -13,9 +13,107 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+const scoreCache = new Map();
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+function normalizeTitleForMatch(rawTitle) {
+    if (!rawTitle) return '';
+    return String(rawTitle)
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/&/g, ' and ')
+        .replace(/['’]/g, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function tokenizeTitle(normalizedTitle) {
+    if (!normalizedTitle) return [];
+    const drop = new Set(['the', 'a', 'an', 'and', 'of', 'to', 'in', 'on', 'for', 'with']);
+    return normalizedTitle
+        .split(' ')
+        .map(t => t.trim())
+        .filter(Boolean)
+        .filter(t => t.length > 1)
+        .filter(t => !drop.has(t));
+}
+
+function jaccardSimilarity(aTokens, bTokens) {
+    const a = new Set(aTokens);
+    const b = new Set(bTokens);
+    if (a.size === 0 || b.size === 0) return 0;
+    let intersection = 0;
+    for (const t of a) if (b.has(t)) intersection += 1;
+    const union = a.size + b.size - intersection;
+    return union === 0 ? 0 : intersection / union;
+}
+
+function parseYearFromText(text) {
+    if (!text) return null;
+    const match = String(text).match(/\b(19|20)\d{2}\b/);
+    if (!match) return null;
+    const yearNum = Number(match[0]);
+    const currentYear = new Date().getFullYear() + 1;
+    if (yearNum < 1870 || yearNum > currentYear) return null;
+    return String(yearNum);
+}
+
+function computeCandidateScore({ targetTitle, targetYear, candidateTitle, candidateYear }) {
+    const targetNorm = normalizeTitleForMatch(targetTitle);
+    const candNorm = normalizeTitleForMatch(candidateTitle);
+
+    const targetTokens = tokenizeTitle(targetNorm);
+    const candTokens = tokenizeTitle(candNorm);
+
+    const tokenSim = jaccardSimilarity(targetTokens, candTokens);
+    const exactNorm = targetNorm && candNorm && targetNorm === candNorm;
+
+    let yearScore = 0;
+    if (targetYear && candidateYear) {
+        const diff = Math.abs(Number(targetYear) - Number(candidateYear));
+        if (diff === 0) yearScore = 1;
+        else if (diff === 1) yearScore = 0.6; // festival vs wide release drift
+        else if (diff === 2) yearScore = 0.2;
+        else yearScore = -0.5;
+    } else if (!targetYear) {
+        yearScore = 0.2; // don’t penalize missing year input
+    }
+
+    // Weighted score: title match dominates, year helps disambiguate
+    const titleScore = (exactNorm ? 1 : tokenSim);
+    return (titleScore * 10) + (yearScore * 3);
+}
+
+function pickBestCandidate(candidates, targetTitle, targetYear) {
+    let best = null;
+    let bestScore = -Infinity;
+    for (const candidate of candidates) {
+        const score = computeCandidateScore({
+            targetTitle,
+            targetYear,
+            candidateTitle: candidate.title,
+            candidateYear: candidate.year
+        });
+        if (score > bestScore) {
+            bestScore = score;
+            best = { ...candidate, score };
+        }
+    }
+    return best;
+}
+
 async function getMovieScores(title, year) {
     try {
         console.log('Getting movie scores for:', title, year);
+
+        const cacheKey = `${normalizeTitleForMatch(title)}|${year || ''}`;
+        const cached = scoreCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+            console.log('Returning cached scores for:', cacheKey);
+            return cached.scores;
+        }
         
         // Get both RT and Letterboxd scores in parallel
         const [rtScores, letterboxdScores] = await Promise.allSettled([
@@ -32,6 +130,8 @@ async function getMovieScores(title, year) {
         };
 
         console.log('Combined scores:', scores);
+
+        scoreCache.set(cacheKey, { ts: Date.now(), scores });
         return scores;
 
     } catch (error) {
@@ -43,160 +143,184 @@ async function getMovieScores(title, year) {
 async function getLetterboxdScores(title, year) {
     try {
         console.log('getLetterboxdScores called with title:', title, 'year:', year);
-        
-        // Try direct URL construction first (bypasses CORS issues)
-        const normalizedTitle = title.toLowerCase()
-            .replace(/[^a-z0-9\s]/g, '')
-            .replace(/\s+/g, '-');
-        
-        console.log('Normalized title:', normalizedTitle);
-        
-        // Include year in the URL for movies with common titles
-        const directUrl = year ? `/film/${normalizedTitle}-${year}/` : `/film/${normalizedTitle}/`;
-        console.log('Constructed direct URL:', directUrl);
-        
-        let movieUrl = null;
-        
-        // Try using a CORS proxy to bypass restrictions
-        const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + directUrl)}`;
-        console.log('Trying CORS proxy URL:', corsProxyUrl);
-        
-        try {
-            const testResponse = await fetch(corsProxyUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                }
-            });
-            
-            if (testResponse.ok) {
-                console.log('CORS proxy URL works:', directUrl);
-                movieUrl = directUrl;
-            }
-        } catch (e) {
-            console.log('CORS proxy URL failed:', e.message);
-        }
-        
-        // Special case for Train to Busan
-        if (!movieUrl && title.toLowerCase().includes('train to busan')) {
-            console.log('Trying known Train to Busan URL with CORS proxy');
+
+        const fetchTextWithTimeout = async (url, timeoutMs) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com/film/train-to-busan/')}`;
-                const testResponse = await fetch(corsProxyUrl, {
+                const response = await fetch(url, {
+                    signal: controller.signal,
+                    credentials: 'omit',
+                    redirect: 'follow',
                     headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5'
                     }
                 });
-                
-                if (testResponse.ok) {
-                    console.log('Known Train to Busan URL works with CORS proxy');
-                    movieUrl = '/film/train-to-busan/';
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
+
+                return await response.text();
             } catch (e) {
-                console.log('Known Train to Busan URL failed with CORS proxy:', e.message);
+                if (e && (e.name === 'AbortError' || String(e).toLowerCase().includes('aborted'))) {
+                    throw new Error(`timeout after ${timeoutMs}ms`);
+                }
+                throw e;
+            } finally {
+                clearTimeout(timeoutId);
             }
-        }
-        
-        if (!movieUrl) {
-            console.log('No Letterboxd movie URL found, trying alternative approach');
-            
-            // Try alternative URL patterns with CORS proxy
-            const alternativeUrls = [
-                `/film/${title.toLowerCase().replace(/\s+/g, '-')}/`,
-                `/film/${title.toLowerCase().replace(/[^a-z0-9]/g, '-')}/`,
-                `/film/${title.toLowerCase().replace(/\s+/g, '_')}/`
+        };
+
+        const fetchLetterboxdHtml = async (pathOrUrl) => {
+            const absoluteUrl = pathOrUrl.startsWith('http')
+                ? pathOrUrl
+                : `https://letterboxd.com${pathOrUrl}`;
+
+            // Prefer proxy fetch (avoids CORS). Do NOT fallback to direct fetch:
+            // browser extensions will be blocked by Letterboxd CORS in practice.
+            const proxiedUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(absoluteUrl)}`;
+            const attempts = [
+                { timeoutMs: 12000, label: 'proxy-12s' },
+                { timeoutMs: 20000, label: 'proxy-20s' }
             ];
-            
-            for (const altUrl of alternativeUrls) {
+
+            let lastError = null;
+            for (const attempt of attempts) {
                 try {
-                    const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + altUrl)}`;
-                    const testResponse = await fetch(corsProxyUrl, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                        }
-                    });
-                    
-                    if (testResponse.ok) {
-                        console.log('Alternative Letterboxd URL works with CORS proxy:', altUrl);
-                        movieUrl = altUrl;
-                        break;
-                    }
+                    return await fetchTextWithTimeout(proxiedUrl, attempt.timeoutMs);
                 } catch (e) {
-                    console.log('Alternative URL failed with CORS proxy:', altUrl, e.message);
+                    lastError = e;
+                    console.log(`Proxy Letterboxd fetch failed (${attempt.label}):`, e.message);
                 }
             }
-        }
-        
-        if (!movieUrl) {
-            console.log('No Letterboxd movie URL found after all attempts');
-            return null;
-        }
-        
-        console.log('Found Letterboxd movie URL:', movieUrl);
-        
-        // Get movie page using CORS proxy
-        const fullUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://letterboxd.com' + movieUrl)}`;
-        const movieResponse = await fetch(fullUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-        });
-        
-        if (!movieResponse.ok) {
-            throw new Error(`Letterboxd movie page failed: ${movieResponse.status}`);
-        }
-        
-        const movieHtml = await movieResponse.text();
-        console.log('Letterboxd page HTML length:', movieHtml.length);
-        console.log('Letterboxd HTML preview:', movieHtml.substring(0, 1000));
-        
-        // Check if the page uses lazy loading for ratings
-        const lazyLoadMatch = movieHtml.match(/data-src="([^"]*ratings-summary[^"]*)"/);
-        if (lazyLoadMatch) {
-            console.log('Found lazy-loaded ratings endpoint:', lazyLoadMatch[1]);
-            
-            // Fix the slug to match the actual movie URL
-            // Convert movieUrl like "/film/share-2023/" to correct ratings URL
-            // Remove trailing slash first, then add the ratings-summary path
-            const cleanMovieUrl = movieUrl.replace(/\/$/, '');
-            const correctRatingsUrl = cleanMovieUrl.replace('/film/', '/csi/film/') + '/ratings-summary/';
-            console.log('Movie URL:', movieUrl);
-            console.log('Clean movie URL:', cleanMovieUrl);
-            console.log('Corrected ratings URL:', correctRatingsUrl);
-            
-            // Fetch the ratings summary separately
+
+            throw lastError || new Error('Proxy Letterboxd fetch failed');
+        };
+
+        const isCloudflareBlockPage = (html) => {
+            if (!html) return false;
+            const lower = String(html).toLowerCase();
+            return lower.includes('just a moment') && lower.includes('cf-chl');
+        };
+
+        const isLikelyLetterboxdFilmPage = (html) => {
+            if (!html) return false;
+            const lower = String(html).toLowerCase();
+            return (
+                lower.includes('property="og:type" content="video.movie"') ||
+                lower.includes('"@type":"movie"') ||
+                lower.includes('"@type": "movie"') ||
+                lower.includes('data-track-action="film"') ||
+                lower.includes('"/film/')
+            );
+        };
+
+        const slugifyLetterboxdTitle = (rawTitle) => {
+            if (!rawTitle) return '';
+
+            // Kanopy/metadata sometimes includes year or suffixes; remove common noise before slugging
+            const withoutYear = String(rawTitle)
+                .replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/g, '')
+                .replace(/\s+\b(19|20)\d{2}\b\s*$/g, '')
+                .replace(/\s*[-–—]\s*kanopy\s*$/i, '')
+                .replace(/\s*\|\s*kanopy\s*$/i, '')
+                .trim();
+
+            // Slugs usually omit subtitles, but keep the main title portion
+            const mainTitle = withoutYear.split(':')[0].trim();
+
+            const normalized = normalizeTitleForMatch(mainTitle)
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            // Letterboxd slugs are usually close to this; we still verify by fetching.
+            return normalized
+                .replace(/[^a-z0-9\s]/g, '')
+                .replace(/\s+/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '');
+        };
+
+        // Prefer a direct film page fetch (more likely to work than search if search is blocked)
+        const directSlug = slugifyLetterboxdTitle(title);
+        const directPath = directSlug ? `/film/${directSlug}/` : null;
+
+        if (directPath) {
+            console.log('Trying direct Letterboxd film URL:', directPath);
+
             try {
-                const ratingsUrl = `https://letterboxd.com${correctRatingsUrl}`;
-                const corsRatingsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(ratingsUrl)}`;
-                console.log('Fetching ratings summary from:', corsRatingsUrl);
-                
-                const ratingsResponse = await fetch(corsRatingsUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                });
-                
-                if (ratingsResponse.ok) {
-                    const ratingsHtml = await ratingsResponse.text();
-                    console.log('Ratings summary HTML length:', ratingsHtml.length);
-                    console.log('Ratings summary preview:', ratingsHtml.substring(0, 500));
-                    
-                    // Extract rating from the ratings summary
-                    return extractLetterboxdScores(ratingsHtml);
-                } else {
-                    console.log('Ratings summary request failed:', ratingsResponse.status);
+                const directHtml = await fetchLetterboxdHtml(directPath);
+                if (!isCloudflareBlockPage(directHtml) && directHtml.length > 5000) {
+                    console.log('Direct Letterboxd film page worked:', directPath);
+                    return extractLetterboxdScores(directHtml);
                 }
+
+                console.log('Direct Letterboxd film page looked blocked/invalid, trying slug variants');
             } catch (e) {
-                console.log('Error fetching ratings summary:', e.message);
+                console.log('Direct Letterboxd film page error:', e.message);
             }
         }
-        
-        // Fallback to extracting from main page if lazy loading fails
-        return extractLetterboxdScores(movieHtml);
+
+        const buildSlugVariants = (rawTitle) => {
+            if (!rawTitle) return [];
+
+            const withoutYear = String(rawTitle)
+                .replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/g, '')
+                .replace(/\s+\b(19|20)\d{2}\b\s*$/g, '')
+                .trim();
+
+            const mainTitle = withoutYear.split(':')[0].trim();
+            const fullTitle = withoutYear.trim();
+
+            const baseVariants = [
+                slugifyLetterboxdTitle(mainTitle),
+                slugifyLetterboxdTitle(fullTitle),
+                // Sometimes Kanopy includes alternate title in parentheses, keep a version without parens content
+                slugifyLetterboxdTitle(withoutYear.replace(/\s*\([^)]*\)\s*/g, ' ').trim())
+            ].filter(Boolean);
+
+            const variants = [...baseVariants];
+
+            // Some Letterboxd slugs include the year suffix (e.g. rabbit-trap-2025).
+            const inferredYear = (year && /^\d{4}$/.test(String(year)) ? String(year) : null) ||
+                parseYearFromText(rawTitle) ||
+                parseYearFromText(withoutYear);
+
+            if (inferredYear) {
+                for (const base of baseVariants) {
+                    variants.push(`${base}-${inferredYear}`);
+                }
+            }
+
+            return Array.from(new Set(variants.filter(Boolean)));
+        };
+
+        const slugVariants = buildSlugVariants(title);
+        for (const slug of slugVariants) {
+            const path = `/film/${slug}/`;
+            console.log('Trying Letterboxd slug variant:', path);
+            try {
+                const html = await fetchLetterboxdHtml(path);
+                if (isCloudflareBlockPage(html) || html.length < 5000) continue;
+                if (!isLikelyLetterboxdFilmPage(html)) {
+                    console.log('Slug variant did not return a film page, continuing:', path);
+                    continue;
+                }
+
+                const parsed = extractLetterboxdScores(html);
+                if (parsed && parsed.rating != null) return parsed;
+
+                console.log('Film page found but rating missing, continuing:', path);
+                continue;
+            } catch (e) {
+                console.log('Letterboxd slug variant failed:', path, e.message);
+            }
+        }
+
+        return null;
         
     } catch (error) {
         console.error('Letterboxd API Error:', error);
@@ -204,245 +328,130 @@ async function getLetterboxdScores(title, year) {
     }
 }
 
-function findLetterboxdMovieUrl(html, title, year) {
-    console.log('Finding Letterboxd movie URL for:', title, year);
-    
-    // Look for movie URLs in search results
-    const movieUrlPatterns = [
-        /href="(\/film\/[^"]+)"/g,
-        /href="([^"]*\/film\/[^"]+)"/g
+function extractLetterboxdCandidates(html) {
+    const candidates = [];
+
+    const safeSubstring = (start, end) => html.substring(Math.max(0, start), Math.min(html.length, end));
+
+    // Primary: hrefs to film pages (with or without trailing slash, relative or absolute)
+    const hrefPatterns = [
+        /href="(\/film\/[^"?#]+\/?)"/gi,
+        /href="(https?:\/\/letterboxd\.com\/film\/[^"?#]+\/?)"/gi,
+        /href="(https?:\/\/www\.letterboxd\.com\/film\/[^"?#]+\/?)"/gi
     ];
-    
-    let allMatches = [];
-    for (const pattern of movieUrlPatterns) {
-        const matches = [...html.matchAll(pattern)];
-        allMatches = allMatches.concat(matches);
+
+    let matches = [];
+    for (const p of hrefPatterns) matches = matches.concat([...html.matchAll(p)]);
+
+    for (const match of matches) {
+        const rawUrl = match[1];
+        const url = rawUrl.startsWith('http')
+            ? rawUrl.replace(/^https?:\/\/(?:www\.)?letterboxd\.com/i, '')
+            : rawUrl;
+
+        const matchIndex = match.index || 0;
+        const context = safeSubstring(matchIndex - 800, matchIndex + 800);
+
+        const year = parseYearFromText(context);
+
+        // Try multiple title signals near the match
+        const titleMatch =
+            context.match(/data-film-name="([^"]{1,140})"/i) ||
+            context.match(/alt="([^"]{1,140})"/i) ||
+            context.match(/title="([^"]{1,140})"/i) ||
+            context.match(/class="[^"]*(?:film-title|title|headline)[^"]*"[^>]*>\s*([^<]{1,140})\s*</i);
+
+        const title = titleMatch ? titleMatch[1].trim() : null;
+        candidates.push({ url: url.endsWith('/') ? url : `${url}/`, title: title || url, year });
     }
-    
-    console.log('Found', allMatches.length, 'Letterboxd movie URLs');
-    
-    let bestMatch = null;
-    let exactMatch = null;
-    
-    for (const match of allMatches) {
-        const url = match[1];
-        const matchIndex = match.index;
-        
-        console.log('Checking Letterboxd URL:', url);
-        
-        // Get surrounding text to look for year and title
-        const start = Math.max(0, matchIndex - 300);
-        const end = Math.min(html.length, matchIndex + 300);
-        const context = html.substring(start, end);
-        
-        // Look for year in context
-        const yearMatch = context.match(/\b(\d{4})\b/);
-        const titleWords = title.toLowerCase().split(/\s+/);
-        
-        console.log('Context preview:', context.substring(0, 200));
-        console.log('Year match:', yearMatch);
-        console.log('Title words:', titleWords);
-        
-        // Check if title words appear in context (more flexible matching)
-        const titleMatch = titleWords.filter(word => word.length > 2).length > 0 && 
-            titleWords.filter(word => word.length > 2).some(word => 
-                context.toLowerCase().includes(word)
-            );
-        
-        console.log('Title match:', titleMatch);
-        
-        // Exact year match gets priority
-        if (year && yearMatch && yearMatch[1] === year && titleMatch) {
-            console.log('Found exact Letterboxd match with year:', url);
-            exactMatch = url;
-            break;
-        }
-        
-        // Partial title match as fallback
-        if (!bestMatch && titleMatch) {
-            console.log('Found partial Letterboxd match:', url);
-            bestMatch = url;
+
+    // Fallback: if markup changes and hrefs disappear, extract film slugs anywhere
+    if (candidates.length === 0) {
+        const slugMatches = [...html.matchAll(/\/film\/([a-z0-9][a-z0-9-]*)\/?/gi)];
+        for (const match of slugMatches) {
+            const slug = match[1];
+            const matchIndex = match.index || 0;
+            const context = safeSubstring(matchIndex - 800, matchIndex + 800);
+            const year = parseYearFromText(context);
+
+            const titleMatch =
+                context.match(/data-film-name="([^"]{1,140})"/i) ||
+                context.match(/alt="([^"]{1,140})"/i) ||
+                context.match(/title="([^"]{1,140})"/i);
+
+            const title = titleMatch ? titleMatch[1].trim() : slug.replace(/-/g, ' ');
+            candidates.push({ url: `/film/${slug}/`, title, year });
         }
     }
-    
-    console.log('Final Letterboxd result - exact match:', exactMatch, 'best match:', bestMatch);
-    return exactMatch || bestMatch;
+
+    // de-dupe by url
+    const seen = new Set();
+    return candidates.filter((c) => {
+        if (!c.url) return false;
+        if (seen.has(c.url)) return false;
+        seen.add(c.url);
+        return true;
+    });
 }
 
 function extractLetterboxdScores(html) {
-    let rating = null;
-    
-    console.log('Extracting Letterboxd rating from HTML...');
-    
-    // Helper function to validate Letterboxd ratings
-    function isValidLetterboxdRating(rating) {
-        const num = parseFloat(rating);
-        // Letterboxd ratings are 0.5 to 5.0
-        return num >= 0.5 && num <= 5.0;
-    }
-    
-    // Debug: Look for all decimal numbers in the HTML
-    const allDecimals = html.match(/(\d+\.\d+)/g);
-    console.log('All decimal numbers found:', allDecimals ? allDecimals.slice(0, 10) : 'None');
-    
-    // Debug: Look specifically for "2.8" in the HTML
-    const containsRating = html.includes('2.8');
-    console.log('HTML contains "2.8":', containsRating);
-    
-    // Debug: Find all occurrences of "2.8" and their context
-    if (containsRating) {
-        const regex = /2\.8/g;
-        const matches = [];
-        let match;
-        while ((match = regex.exec(html)) !== null) {
-            const context = html.substring(Math.max(0, match.index - 100), match.index + 100);
-            matches.push({
-                index: match.index,
-                context: context
-            });
-        }
-        console.log('All "2.8" occurrences and contexts:', matches);
-    }
-    
-    // Debug: Look for rating-related text
-    const ratingText = html.match(/[^>]*rating[^<]*/gi);
-    console.log('Rating text found:', ratingText ? ratingText.slice(0, 5) : 'None');
-    
-    // Try multiple specific approaches to find the correct rating
-    
-    // Approach 1: Look for structured data rating value
-    console.log('Approach 1: Structured data');
-    const structuredRating = html.match(/"ratingValue":\s*(\d+\.?\d*)/);
-    if (structuredRating && isValidLetterboxdRating(structuredRating[1])) {
-        rating = parseFloat(structuredRating[1]);
-        console.log('Found rating from structured data:', rating);
-    }
-    
-    // Approach 2: Look for meta tag rating
-    if (!rating) {
-        console.log('Approach 2: Meta tags');
-        const metaRating = html.match(/<meta[^>]*property="[^"]*rating[^"]*"[^>]*content="(\d+\.?\d*)"/i);
-        if (metaRating && isValidLetterboxdRating(metaRating[1])) {
-            rating = parseFloat(metaRating[1]);
-            console.log('Found rating from meta tag:', rating);
-        }
-    }
-    
-    // Approach 3: Look for all valid decimal numbers and test each one
-    if (!rating) {
-        console.log('Approach 3: Testing all valid decimal numbers');
-        const allValidDecimals = [];
-        const decimalMatches = html.matchAll(/(\d\.\d+)/g);
-        
-        for (const match of decimalMatches) {
-            const num = parseFloat(match[1]);
-            if (isValidLetterboxdRating(match[1])) {
-                allValidDecimals.push({
-                    value: num,
-                    context: html.substring(Math.max(0, match.index - 50), match.index + 50)
-                });
-            }
-        }
-        
-        console.log('All valid decimal ratings found:', allValidDecimals);
-        
-        // If we have valid decimals, try to find the most likely rating
-        if (allValidDecimals.length > 0) {
-            // Look for the one in the best context
-            for (const decimal of allValidDecimals) {
-                const context = decimal.context.toLowerCase();
-                if (context.includes('rating') || context.includes('average') || context.includes('stars')) {
-                    rating = decimal.value;
-                    console.log('Found rating from context analysis:', rating, 'Context:', decimal.context);
-                    break;
-                }
-            }
-            
-            // If no context match, take the first valid one
-            if (!rating) {
-                rating = allValidDecimals[0].value;
-                console.log('Using first valid decimal as rating:', rating);
-            }
-        }
-    }
-    
-    // Approach 4: Look for specific rating display patterns
-    if (!rating) {
-        console.log('Approach 4: Specific display patterns');
-        const displayPatterns = [
-            /class="[^"]*rating[^"]*"[^>]*>.*?(\d\.\d+)/i,
-            /data-rating="(\d\.\d+)"/i,
-            /title="(\d\.\d+)[^"]*rating/i,
-            /(\d\.\d+)[^<]*out of 5/i
-        ];
-        
-        for (let i = 0; i < displayPatterns.length; i++) {
-            const match = html.match(displayPatterns[i]);
-            if (match && isValidLetterboxdRating(match[1])) {
-                rating = parseFloat(match[1]);
-                console.log(`Found rating from display pattern ${i + 1}:`, rating);
-                break;
-            }
-        }
-    }
-    
-    // Approach 5: Target the specific display-rating link structure
-    if (!rating) {
-        console.log('Approach 5: Targeting display-rating link');
-        // Target: <a href="/film/share-2023/ratings/" class="tooltip display-rating" data-original-title="..."> 2.8 </a>
-        const displayRatingPattern = /<a[^>]*class="[^"]*display-rating[^"]*"[^>]*>\s*(\d+\.\d+)\s*<\/a>/i;
-        const displayMatch = html.match(displayRatingPattern);
-        
-        if (displayMatch && isValidLetterboxdRating(displayMatch[1])) {
-            rating = parseFloat(displayMatch[1]);
-            console.log('Found rating from display-rating link:', rating);
-            
-            // Show the full match for verification
-            console.log('Full display-rating match:', displayMatch[0]);
-        } else if (displayMatch) {
-            console.log('Found display-rating link but invalid rating:', displayMatch[1]);
-        } else {
-            console.log('No display-rating link found');
-            
-            // Debug: Look for any display-rating elements
-            const anyDisplayRating = html.match(/display-rating[^>]*>/i);
-            if (anyDisplayRating) {
-                console.log('Found display-rating element but no rating:', anyDisplayRating[0]);
-            }
-        }
-    }
-    
-    // Approach 6: Broader search for the display-rating structure
-    if (!rating) {
-        console.log('Approach 6: Broader display-rating search');
-        // More flexible pattern for the display-rating structure
-        const flexibleDisplayPattern = /<a[^>]*display-rating[^>]*>[\s\S]*?(\d+\.\d+)[\s\S]*?<\/a>/i;
-        const flexibleMatch = html.match(flexibleDisplayPattern);
-        
-        if (flexibleMatch && isValidLetterboxdRating(flexibleMatch[1])) {
-            rating = parseFloat(flexibleMatch[1]);
-            console.log('Found rating from flexible display-rating pattern:', rating);
-            console.log('Flexible match:', flexibleMatch[0]);
-        } else if (flexibleMatch) {
-            console.log('Found flexible display-rating but invalid rating:', flexibleMatch[1]);
-        } else {
-            console.log('No flexible display-rating found');
-        }
-    }
-    
-    console.log('Final Letterboxd rating:', rating);
-    
-    return {
-        rating: rating
+    const isValidLetterboxdRating = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) && num >= 0.5 && num <= 5.0;
     };
+
+    // Fast path: JSON-LD (Letterboxd reliably includes aggregateRating.ratingValue)
+    const jsonLdBlocks = [...html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)]
+        .map((m) => m[1])
+        .filter(Boolean);
+
+    for (const rawBlock of jsonLdBlocks) {
+        const cleaned = rawBlock
+            .replace(/\/\*\s*<!\[CDATA\[\s*\*\//g, '')
+            .replace(/\/\*\s*\]\]>\s*\*\//g, '')
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .trim();
+
+        if (!cleaned) continue;
+
+        // Try strict JSON parse first
+        try {
+            const parsed = JSON.parse(cleaned);
+            const ratingValue = parsed?.aggregateRating?.ratingValue;
+            if (isValidLetterboxdRating(ratingValue)) {
+                return { rating: Number(ratingValue) };
+            }
+        } catch {
+            // Fall through to regex extraction below
+        }
+
+        // Regex fallback: pull ratingValue without requiring valid JSON
+        const ratingMatch =
+            cleaned.match(/"aggregateRating"\s*:\s*\{[\s\S]*?"ratingValue"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i) ||
+            cleaned.match(/"ratingValue"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+
+        if (ratingMatch && isValidLetterboxdRating(ratingMatch[1])) {
+            return { rating: Number(ratingMatch[1]) };
+        }
+    }
+
+    // Last-resort fallback: look for a nearby aggregateRating snippet in page HTML
+    const inlineMatch =
+        html.match(/"aggregateRating"\s*:\s*\{[\s\S]*?"ratingValue"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i) ||
+        html.match(/"ratingValue"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+
+    if (inlineMatch && isValidLetterboxdRating(inlineMatch[1])) {
+        return { rating: Number(inlineMatch[1]) };
+    }
+
+    return { rating: null };
 }
 
 async function getRottenTomatoesScores(title, year) {
     try {
-        // Try different search variations
+        // Search Rotten Tomatoes, then pick the best candidate using title similarity + soft year
         const searchTerms = [
-            title,
-            `${title} ${year}`,
+            title,  // Search without year first
             title.replace(/\s+/g, ' ').trim()
         ];
         
@@ -473,7 +482,7 @@ async function getRottenTomatoesScores(title, year) {
             searchHtml = await searchResponse.text();
             console.log('Search HTML length:', searchHtml.length);
             
-            movieUrl = findMovieUrl(searchHtml, title, year);
+            movieUrl = findBestRtMovieUrl(searchHtml, title, year || null);
             
             if (movieUrl) {
                 console.log('Found movie URL with search term:', searchTerm);
@@ -481,50 +490,7 @@ async function getRottenTomatoesScores(title, year) {
             }
         }
         
-        if (!movieUrl) {
-            // Try direct URL construction for common movies
-            const normalizedTitle = title.toLowerCase()
-                .replace(/[^a-z0-9\s]/g, '')
-                .replace(/\s+/g, '_');
-            
-            const directUrl = `/m/${normalizedTitle}`;
-            console.log('Trying direct URL:', directUrl);
-            
-            // Test if the direct URL works
-            try {
-                const testResponse = await fetch(`https://www.rottentomatoes.com${directUrl}`, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                });
-                
-                if (testResponse.ok) {
-                    console.log('Direct URL works:', directUrl);
-                    movieUrl = directUrl;
-                }
-            } catch (e) {
-                console.log('Direct URL failed:', e.message);
-            }
-        }
-        
-        // Special case for C'mon C'mon
-        if (!movieUrl && title.toLowerCase().includes('c\'mon c\'mon')) {
-            console.log('Trying known C\'mon C\'mon URL');
-            try {
-                const testResponse = await fetch('https://www.rottentomatoes.com/m/cmon_cmon', {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                });
-                
-                if (testResponse.ok) {
-                    console.log('Known C\'mon C\'mon URL works');
-                    movieUrl = '/m/cmon_cmon';
-                }
-            } catch (e) {
-                console.log('Known C\'mon C\'mon URL failed:', e.message);
-            }
-        }
+        // Avoid direct URL guessing here; RT slugs are not reliably derivable from titles.
         
         if (!movieUrl) {
             console.log('No movie URL found after trying all search terms. Search HTML preview:', searchHtml.substring(0, 1000));
@@ -579,72 +545,85 @@ async function getRottenTomatoesScores(title, year) {
     }
 }
 
-function findMovieUrl(html, title, year) {
-    console.log('Finding movie URL for:', title, year);
-    
-    // Use regex to find movie URLs since DOMParser isn't available in service workers
-    // Try multiple patterns for different RT URL formats
-    const movieUrlPatterns = [
-        /href="(\/m\/[^"]+)"/g,
-        /href="(\/movie\/[^"]+)"/g,
-        /href="([^"]*\/m\/[^"]+)"/g
-    ];
-    
-    let allMatches = [];
-    for (const pattern of movieUrlPatterns) {
-        const matches = [...html.matchAll(pattern)];
-        allMatches = allMatches.concat(matches);
+function extractRtCandidates(html) {
+    const candidates = [];
+
+    // Prefer the modern RT search results component:
+    // <search-page-media-row release-year="2024"> ... <a data-qa="info-name">The Life of Chuck</a>
+    const rowPattern = /<search-page-media-row\b[\s\S]*?<\/search-page-media-row>/gi;
+    const rows = [...html.matchAll(rowPattern)].map(m => m[0]);
+
+    for (const rowHtml of rows) {
+        const hrefMatch = rowHtml.match(/href="(https?:\/\/www\.rottentomatoes\.com\/(?:m|movie)\/[^"?#]+)"/i);
+        const titleMatch = rowHtml.match(/data-qa="info-name"[^>]*>\s*([^<]{1,180})\s*</i);
+        const yearMatch = rowHtml.match(/\brelease-year="(\d{4})"/i);
+
+        if (!hrefMatch) continue;
+        const url = hrefMatch[1];
+        const title = titleMatch ? titleMatch[1].trim() : url;
+        const year = yearMatch ? yearMatch[1] : null;
+
+        candidates.push({ url, title, year });
     }
-    
-    console.log('Found', allMatches.length, 'movie URLs');
-    
-    let bestMatch = null;
-    let exactMatch = null;
-    
-    // Get context around each match to find year information
-    for (const match of allMatches) {
-        const url = match[1];
-        const matchIndex = match.index;
-        
-        console.log('Checking URL:', url);
-        
-        // Get surrounding text to look for year and title
-        const start = Math.max(0, matchIndex - 300);
-        const end = Math.min(html.length, matchIndex + 300);
-        const context = html.substring(start, end);
-        
-        // Look for year in context
-        const yearMatch = context.match(/\b(\d{4})\b/);
-        const titleWords = title.toLowerCase().split(/\s+/);
-        
-        console.log('Context preview:', context.substring(0, 200));
-        console.log('Year match:', yearMatch);
-        console.log('Title words:', titleWords);
-        
-        // Check if title words appear in context (more flexible matching)
-        const titleMatch = titleWords.filter(word => word.length > 2).length > 0 && 
-            titleWords.filter(word => word.length > 2).some(word => 
-                context.toLowerCase().includes(word)
-            );
-        
-        console.log('Title match:', titleMatch);
-        
-        // Exact year match gets priority
-        if (year && yearMatch && yearMatch[1] === year && titleMatch) {
-            console.log('Found exact match with year:', url);
-            exactMatch = url;
-            break;
-        }
-        
-        // Partial title match as fallback
-        if (!bestMatch && titleMatch) {
-            console.log('Found partial match:', url);
-            bestMatch = url;
+
+    // Fallback for older markup: grab RT links (including absolute URLs) with nearby context.
+    if (candidates.length === 0) {
+        const patterns = [
+            /href="(https?:\/\/www\.rottentomatoes\.com\/m\/[^"?#]+)"/g,
+            /href="(https?:\/\/www\.rottentomatoes\.com\/movie\/[^"?#]+)"/g,
+            /href="(\/m\/[^"?#]+)"/g,
+            /href="(\/movie\/[^"?#]+)"/g
+        ];
+
+        let matches = [];
+        for (const pattern of patterns) matches = matches.concat([...html.matchAll(pattern)]);
+
+        for (const match of matches) {
+            const url = match[1];
+            const matchIndex = match.index || 0;
+            const start = Math.max(0, matchIndex - 900);
+            const end = Math.min(html.length, matchIndex + 900);
+            const context = html.substring(start, end);
+
+            const year =
+                (context.match(/\brelease-year="(\d{4})"/i) || [])[1] ||
+                (context.match(/data-qa="info-year"[^>]*>\((\d{4})\)</) || [])[1] ||
+                (context.match(/\((\d{4})\)/) || [])[1] ||
+                parseYearFromText(context);
+
+            const titleMatch =
+                context.match(/data-qa="info-name"[^>]*>\s*([^<]{1,180})\s*</i) ||
+                context.match(/data-qa="search-result-title"[^>]*>\s*([^<]{1,180})\s*</i);
+
+            const title = titleMatch ? titleMatch[1].trim() : url;
+            candidates.push({ url, title, year: year || null });
         }
     }
-    
-    console.log('Final result - exact match:', exactMatch, 'best match:', bestMatch);
-    return exactMatch || bestMatch;
+
+    const seen = new Set();
+    return candidates.filter((c) => {
+        const key = c.url;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function findBestRtMovieUrl(html, title, year) {
+    console.log('Finding best RT movie URL for:', title, year);
+    const candidates = extractRtCandidates(html);
+    const best = pickBestCandidate(candidates, title, year);
+    if (!best || !best.url) return null;
+
+    // Guardrail: don’t return low-confidence matches
+    // Typical good matches are ~10-13; random matches are much lower.
+    if (typeof best.score === 'number' && best.score < 6) {
+        console.log('RT best candidate below threshold:', best);
+        return null;
+    }
+
+    console.log('Picked RT candidate:', best);
+    return best.url;
 }
 
 function extractScores(html) {
@@ -652,6 +631,39 @@ function extractScores(html) {
     let popcornScore = null;
     
     console.log('Extracting RT scores from HTML...');
+
+    // Prefer parsing the embedded scorecard JSON if present (most reliable),
+    // and prefer VERIFIED audience score over ALL audience score.
+    try {
+        const scorecardJsonMatch = html.match(/<script[^>]*id="media-scorecard-json"[^>]*>\s*({[\s\S]*?})\s*<\/script>/i);
+        if (scorecardJsonMatch && scorecardJsonMatch[1]) {
+            const scorecard = JSON.parse(scorecardJsonMatch[1]);
+
+            const criticsPercent =
+                scorecard?.criticsScore?.scorePercent ||
+                scorecard?.criticsAll?.scorePercent ||
+                (scorecard?.criticsScore?.score ? `${scorecard.criticsScore.score}%` : null) ||
+                (scorecard?.criticsAll?.score ? `${scorecard.criticsAll.score}%` : null);
+
+            const audiencePercent =
+                scorecard?.audienceVerified?.scorePercent ||
+                scorecard?.audienceScore?.scorePercent ||
+                scorecard?.audienceAll?.scorePercent ||
+                (scorecard?.audienceVerified?.score ? `${scorecard.audienceVerified.score}%` : null) ||
+                (scorecard?.audienceScore?.score ? `${scorecard.audienceScore.score}%` : null) ||
+                (scorecard?.audienceAll?.score ? `${scorecard.audienceAll.score}%` : null);
+
+            if (criticsPercent && /^\d{1,3}%$/.test(criticsPercent)) tomatoScore = criticsPercent;
+            if (audiencePercent && /^\d{1,3}%$/.test(audiencePercent)) popcornScore = audiencePercent;
+
+            if (tomatoScore || popcornScore) {
+                console.log('Extracted scores from media-scorecard JSON:', { tomatoScore, popcornScore });
+                return { critics: tomatoScore, audience: popcornScore };
+            }
+        }
+    } catch (e) {
+        console.log('Scorecard JSON parse failed, falling back to regex:', e.message);
+    }
     
     // Debug: Look for all percentage values in the HTML
     const allPercentages = html.match(/(\d+)%/g);
@@ -684,9 +696,13 @@ function extractScores(html) {
         /class="[^"]*popcornmeter[^"]*"[^>]*>.*?(\d+)%/i,
         // Look for audience class
         /class="[^"]*audience[^"]*"[^>]*>.*?(\d+)%/i,
-        // JSON patterns for audience
-        /"popcornmeter":\s*(\d+)/,
-        /"audience":\s*(\d+)/
+        // JSON patterns for audience (avoid grabbing unrelated scores like "audienceAll": 83 when verified exists)
+        /"audienceVerified"[\s\S]*?"scorePercent"\s*:\s*"(\d{1,3})%"/i,
+        /"audienceVerified"[\s\S]*?"score"\s*:\s*"(\d{1,3})"/i,
+        /"audienceScore"[\s\S]*?"scorePercent"\s*:\s*"(\d{1,3})%"/i,
+        /"audienceScore"[\s\S]*?"score"\s*:\s*"(\d{1,3})"/i,
+        /"audienceAll"[\s\S]*?"scorePercent"\s*:\s*"(\d{1,3})%"/i,
+        /"audienceAll"[\s\S]*?"score"\s*:\s*"(\d{1,3})"/i
     ];
     
     // Helper function to validate scores

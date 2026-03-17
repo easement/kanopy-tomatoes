@@ -1,6 +1,104 @@
 console.log('Kanopy RT extension loaded');
 
+function normalizeTitleForMatch(rawTitle) {
+    if (!rawTitle) return '';
+    return rawTitle
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/&/g, ' and ')
+        .replace(/['’]/g, '')
+        .replace(/[^a-z0-9\s:.-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function cleanupTitle(rawTitle) {
+    if (!rawTitle) return '';
+    return rawTitle
+        .replace(/^\s*[-–—]\s*/, '')
+        .replace(/\s*[-–—]\s*$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractYearFromText(text) {
+    if (!text) return null;
+    const match = String(text).match(/\b(19|20)\d{2}\b/);
+    if (!match) return null;
+    const yearNum = Number(match[0]);
+    const currentYear = new Date().getFullYear() + 1;
+    if (yearNum < 1870 || yearNum > currentYear) return null;
+    return String(yearNum);
+}
+
+function parseJsonLdMovieInfo() {
+    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+    for (const script of scripts) {
+        const raw = script.textContent;
+        if (!raw || !raw.trim()) continue;
+        try {
+            const parsed = JSON.parse(raw);
+            const nodes = Array.isArray(parsed) ? parsed : [parsed];
+            for (const node of nodes) {
+                const candidate = extractFromJsonLdNode(node);
+                if (candidate && candidate.title) return candidate;
+            }
+        } catch {
+            // ignore invalid JSON-LD blocks
+        }
+    }
+    return null;
+}
+
+function extractFromJsonLdNode(node) {
+    if (!node || typeof node !== 'object') return null;
+
+    // Handle @graph containers
+    if (Array.isArray(node['@graph'])) {
+        for (const child of node['@graph']) {
+            const candidate = extractFromJsonLdNode(child);
+            if (candidate && candidate.title) return candidate;
+        }
+    }
+
+    const typeRaw = node['@type'];
+    const type = Array.isArray(typeRaw) ? typeRaw.join(' ') : String(typeRaw || '');
+    const looksLikeMovie = /movie|film|video/i.test(type);
+
+    const name = typeof node.name === 'string' ? node.name : null;
+    const headline = typeof node.headline === 'string' ? node.headline : null;
+    const title = cleanupTitle(name || headline || '');
+    const datePublished = node.datePublished || node.releaseDate || node.dateCreated;
+    const year = extractYearFromText(datePublished);
+
+    if (looksLikeMovie && title) return { title, year };
+    if (title && year) return { title, year };
+    return null;
+}
+
+function getMetaContent(selector) {
+    const el = document.querySelector(selector);
+    if (!el) return null;
+    const value = el.getAttribute('content');
+    return value && value.trim() ? value.trim() : null;
+}
+
 function extractMovieInfo() {
+    const jsonLd = parseJsonLdMovieInfo();
+    if (jsonLd && jsonLd.title) {
+        const title = cleanupTitle(jsonLd.title);
+        return { title, year: jsonLd.year || null, titleElement: null };
+    }
+
+    const ogTitle = getMetaContent('meta[property="og:title"]') || getMetaContent('meta[name="twitter:title"]');
+    if (ogTitle) {
+        const cleaned = cleanupTitle(ogTitle);
+        const yearFromOg = extractYearFromText(ogTitle);
+        const title = cleanupTitle(cleaned.replace(/\s*\(?\b(19|20)\d{2}\b\)?\s*/g, ' ').trim());
+        return { title, year: yearFromOg || null, titleElement: null };
+    }
+
     const titleSelectors = [
         '.product-title',
         'h3.product-title', 
@@ -45,18 +143,19 @@ function extractMovieInfo() {
         title = title.replace(/\s*\(?\d{4}\)?\s*/, '').trim();
     }
     
-    // If no year in title, look for it elsewhere
-    if (!year) {
-        const metaSelectors = [
-            '.product-year',
-            '.release-year', 
-            '.year',
-            '.product-meta',
-            '[class*="year"]',
-            '[class*="date"]',
-            '.release-date',
-            '.movie-year'
-        ];
+        // If no year in title, look for it elsewhere
+        if (!year) {
+            const metaSelectors = [
+                '.product-year',
+                '.release-year', 
+                '.year',
+                '.product-meta',
+                '[class*="year"]',
+                '[class*="date"]',
+                '.release-date',
+                '.movie-year',
+                '.product-release-year'  // Added specific Kanopy selector
+            ];
         
         for (const selector of metaSelectors) {
             const element = document.querySelector(selector);
@@ -70,26 +169,12 @@ function extractMovieInfo() {
             }
         }
         
-        // Also check for year in any text content
-        if (!year) {
-            const bodyText = document.body.textContent;
-            const yearMatches = bodyText.match(/\b(19|20)\d{2}\b/g);
-            if (yearMatches && yearMatches.length > 0) {
-                // Take the first reasonable year (not current year)
-                const currentYear = new Date().getFullYear();
-                for (const yearMatch of yearMatches) {
-                    const yearNum = parseInt(yearMatch);
-                    if (yearNum >= 1900 && yearNum <= currentYear) {
-                        year = yearMatch;
-                        break;
-                    }
-                }
-            }
-        }
+        // Intentionally avoid scanning the entire page for years:
+        // it commonly picks up irrelevant years (copyright, awards, etc.)
     }
     
     // Clean up title
-    title = title.replace(/^\s*[-–—]\s*/, '').replace(/\s*[-–—]\s*$/, '');
+    title = cleanupTitle(title);
     
     return { title, year, titleElement };
 }
@@ -100,12 +185,9 @@ function generateRTUrl(title, year) {
 }
 
 function generateLetterboxdUrl(title, year) {
-    // Try to generate direct Letterboxd URL
-    const normalizedTitle = title.toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, '-');
-    
-    return `https://letterboxd.com/film/${normalizedTitle}/`;
+    // Use search rather than guessing a slug (slugs are not reliably derivable from titles)
+    const query = year ? `${title} ${year}` : title;
+    return `https://letterboxd.com/search/${encodeURIComponent(normalizeTitleForMatch(query))}/`;
 }
 
 function showScores(scores, movieInfo) {
@@ -134,11 +216,11 @@ function showScores(scores, movieInfo) {
                 <div class="rt-score-content">
                     <div class="rt-score-item">
                         <span class="rt-score-label">Tomatometer</span>
-                        <span class="rt-score-value critics">${rtScores.audience || 'N/A'}</span>
+                        <span class="rt-score-value critics">${rtScores.critics || 'N/A'}</span>
                     </div>
                     <div class="rt-score-item">
                         <span class="rt-score-label">Audience</span>
-                        <span class="rt-score-value audience">${rtScores.critics || 'N/A'}</span>
+                        <span class="rt-score-value audience">${rtScores.audience || 'N/A'}</span>
                     </div>
                 </div>
             </div>
@@ -246,7 +328,7 @@ function showError(message, movieInfo) {
     `;
     
     // Insert after the title element
-    if (movieInfo.titleElement && movieInfo.titleElement.parentNode) {
+    if (movieInfo && movieInfo.titleElement && movieInfo.titleElement.parentNode) {
         movieInfo.titleElement.parentNode.insertBefore(div, movieInfo.titleElement.nextSibling);
     } else {
         // Fallback: insert at the top of the page
@@ -274,16 +356,31 @@ async function getScores(title, year) {
 }
 
 async function run() {
+    let movieInfo = null;
     try {
         console.log('Extension running...');
         
-        const movieInfo = extractMovieInfo();
+        movieInfo = extractMovieInfo();
         console.log('Movie info:', movieInfo);
         
         if (!movieInfo || !movieInfo.title) {
+            const urlKey = location.href;
+            const current = runAttemptStateByUrl.get(urlKey) || { attempts: 0 };
+            const nextAttempts = current.attempts + 1;
+            runAttemptStateByUrl.set(urlKey, { attempts: nextAttempts });
+
+            if (nextAttempts < MAX_RUN_ATTEMPTS_PER_URL) {
+                const delayMs = Math.min(250 * Math.pow(2, nextAttempts - 1), 4000);
+                console.log(`Title not found yet, retrying (${nextAttempts}/${MAX_RUN_ATTEMPTS_PER_URL}) in ${delayMs}ms`);
+                scheduleRun(delayMs);
+                return;
+            }
+
             showError('Could not find movie title on this page. Please make sure you are on a movie page.', movieInfo);
             return;
         }
+
+        runAttemptStateByUrl.delete(location.href);
         
         showLoading(movieInfo);
         
@@ -296,23 +393,29 @@ async function run() {
         
     } catch (error) {
         console.error('Extension error:', error);
-        showError(error.message, movieInfo);
+        showError(error?.message || 'Unknown error', movieInfo);
     }
 }
 
-// Initialize when page loads
+const scheduleRun = (() => {
+    let timeoutId = null;
+    return (delayMs) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+            timeoutId = null;
+            run();
+        }, delayMs);
+    };
+})();
+
+const runAttemptStateByUrl = new Map();
+const MAX_RUN_ATTEMPTS_PER_URL = 6;
+
+// Initialize quickly when page loads
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(() => {
-            // Auto-run after a short delay
-            setTimeout(run, 2000);
-        }, 1000);
-    });
+    document.addEventListener('DOMContentLoaded', () => scheduleRun(250));
 } else {
-    setTimeout(() => {
-        // Auto-run after a short delay
-        setTimeout(run, 2000);
-    }, 1000);
+    scheduleRun(250);
 }
 
 // Listen for URL changes (for SPA navigation)
@@ -321,9 +424,7 @@ new MutationObserver(() => {
     const url = location.href;
     if (url !== lastUrl) {
         lastUrl = url;
-        setTimeout(() => {
-            setTimeout(run, 2000);
-        }, 1000);
+        scheduleRun(500);
     }
 }).observe(document, { subtree: true, childList: true });
 
