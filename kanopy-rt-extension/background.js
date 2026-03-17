@@ -11,6 +11,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         return true; // Will respond asynchronously
     }
+
+    if (request.action === 'getRTScores') {
+        getRottenTomatoesScores(request.title, request.year)
+            .then((scores) => sendResponse({ success: true, scores }))
+            .catch((error) => {
+                console.error('Background script RT error:', error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true;
+    }
+
+    if (request.action === 'getLetterboxdScores') {
+        getLetterboxdScores(request.title, request.year)
+            .then((scores) => sendResponse({ success: true, scores }))
+            .catch((error) => {
+                console.error('Background script Letterboxd error:', error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true;
+    }
 });
 
 const scoreCache = new Map();

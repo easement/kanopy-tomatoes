@@ -355,6 +355,159 @@ async function getScores(title, year) {
     }
 }
 
+async function getRTScores(title, year) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getRTScores',
+        title,
+        year
+    })
+
+    if (response && response.success) return response.scores
+    throw new Error(response ? response.error : 'No response from background script')
+}
+
+async function getLetterboxdScores(title, year) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getLetterboxdScores',
+        title,
+        year
+    })
+
+    if (response && response.success) return response.scores
+    throw new Error(response ? response.error : 'No response from background script')
+}
+
+function renderScoresShell(movieInfo) {
+    const existing = document.getElementById('rt-scores-embedded')
+    if (existing) existing.remove()
+
+    const div = document.createElement('div')
+    div.id = 'rt-scores-embedded'
+    div.className = 'rt-scores-container loading'
+    div.innerHTML = `
+        <div class="rt-score-section" data-section="rt">
+            <div class="rt-score-header">
+                <span class="rt-icon">🍅</span>
+                <span class="rt-label">Rotten Tomatoes</span>
+            </div>
+            <div class="rt-score-content">
+                <div class="rt-loading-spinner"></div>
+            </div>
+        </div>
+        <div class="rt-score-section" data-section="letterboxd">
+            <div class="rt-score-header">
+                <span class="rt-icon">📽️</span>
+                <span class="rt-label">Letterboxd</span>
+            </div>
+            <div class="rt-score-content">
+                <div class="rt-loading-spinner"></div>
+            </div>
+        </div>
+    `
+
+    if (movieInfo && movieInfo.titleElement && movieInfo.titleElement.parentNode) {
+        movieInfo.titleElement.parentNode.insertBefore(div, movieInfo.titleElement.nextSibling)
+        return
+    }
+
+    document.body.insertBefore(div, document.body.firstChild)
+}
+
+function updateRTSection(movieInfo, rtScores) {
+    const container = document.getElementById('rt-scores-embedded')
+    if (!container) return
+
+    const section = container.querySelector('[data-section="rt"]')
+    if (!section) return
+
+    const rtUrl = generateRTUrl(movieInfo.title, movieInfo.year)
+    const critics = rtScores?.critics || 'N/A'
+    const audience = rtScores?.audience || 'N/A'
+
+    section.innerHTML = `
+        <div class="rt-score-header">
+            <span class="rt-icon">🍅</span>
+            <a href="${rtUrl}" target="_blank" class="rt-label-link">
+                <span class="rt-label">Rotten Tomatoes</span>
+            </a>
+        </div>
+        <div class="rt-score-content">
+            <div class="rt-score-item">
+                <span class="rt-score-label">Tomatometer</span>
+                <span class="rt-score-value critics">${critics}</span>
+            </div>
+            <div class="rt-score-item">
+                <span class="rt-score-label">Audience</span>
+                <span class="rt-score-value audience">${audience}</span>
+            </div>
+        </div>
+    `
+}
+
+function updateRTSectionError(message) {
+    const container = document.getElementById('rt-scores-embedded')
+    if (!container) return
+    const section = container.querySelector('[data-section="rt"]')
+    if (!section) return
+
+    section.innerHTML = `
+        <div class="rt-score-header">
+            <span class="rt-icon">🍅</span>
+            <span class="rt-label">Rotten Tomatoes</span>
+        </div>
+        <div class="rt-score-content">
+            <div class="rt-error-message">${message}</div>
+        </div>
+    `
+}
+
+function updateLetterboxdSection(movieInfo, letterboxdScores) {
+    const container = document.getElementById('rt-scores-embedded')
+    if (!container) return
+
+    const section = container.querySelector('[data-section="letterboxd"]')
+    if (!section) return
+
+    const letterboxdUrl = generateLetterboxdUrl(movieInfo.title, movieInfo.year)
+    const rating = letterboxdScores?.rating ? Number(letterboxdScores.rating).toFixed(1) : 'N/A'
+
+    section.innerHTML = `
+        <div class="rt-score-header">
+            <span class="rt-icon">📽️</span>
+            <a href="${letterboxdUrl}" target="_blank" class="rt-label-link">
+                <span class="rt-label">Letterboxd</span>
+            </a>
+        </div>
+        <div class="rt-score-content">
+            <div class="rt-score-item">
+                <span class="rt-score-label">Rating</span>
+                <span class="rt-score-value letterboxd">${rating}</span>
+            </div>
+            <div class="rt-score-item empty">
+                <span class="rt-score-label">&nbsp;</span>
+                <span class="rt-score-value">&nbsp;</span>
+            </div>
+        </div>
+    `
+}
+
+function updateLetterboxdSectionError(message) {
+    const container = document.getElementById('rt-scores-embedded')
+    if (!container) return
+    const section = container.querySelector('[data-section="letterboxd"]')
+    if (!section) return
+
+    section.innerHTML = `
+        <div class="rt-score-header">
+            <span class="rt-icon">📽️</span>
+            <span class="rt-label">Letterboxd</span>
+        </div>
+        <div class="rt-score-content">
+            <div class="rt-error-message">${message}</div>
+        </div>
+    `
+}
+
 async function run() {
     let movieInfo = null;
     try {
@@ -381,15 +534,17 @@ async function run() {
         }
 
         runAttemptStateByUrl.delete(location.href);
-        
-        showLoading(movieInfo);
-        
-        const scores = await getScores(movieInfo.title, movieInfo.year);
-        console.log('Scores received:', scores);
-        console.log('RT scores:', scores.rt);
-        console.log('Letterboxd scores:', scores.letterboxd);
-        
-        showScores(scores, movieInfo);
+
+        renderScoresShell(movieInfo)
+
+        // Fetch independently so we can render whichever returns first
+        getRTScores(movieInfo.title, movieInfo.year)
+            .then((rt) => updateRTSection(movieInfo, rt))
+            .catch((e) => updateRTSectionError(e?.message || 'RT unavailable'))
+
+        getLetterboxdScores(movieInfo.title, movieInfo.year)
+            .then((lb) => updateLetterboxdSection(movieInfo, lb))
+            .catch((e) => updateLetterboxdSectionError(e?.message || 'Letterboxd unavailable'))
         
     } catch (error) {
         console.error('Extension error:', error);
