@@ -201,19 +201,30 @@ async function getLetterboxdScores(title, year) {
 
             // Prefer proxy fetch (avoids CORS). Do NOT fallback to direct fetch:
             // browser extensions will be blocked by Letterboxd CORS in practice.
-            const proxiedUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(absoluteUrl)}`;
+            const allOriginsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(absoluteUrl)}`;
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const attempts = [
-                { timeoutMs: 12000, label: 'proxy-12s' },
-                { timeoutMs: 20000, label: 'proxy-20s' }
+                { timeoutMs: 12000, label: 'allorigins-12s' },
+                { timeoutMs: 20000, label: 'allorigins-20s' },
+                { timeoutMs: 30000, label: 'allorigins-30s' }
             ];
 
             let lastError = null;
-            for (const attempt of attempts) {
-                try {
-                    return await fetchTextWithTimeout(proxiedUrl, attempt.timeoutMs);
-                } catch (e) {
-                    lastError = e;
-                    console.log(`Proxy Letterboxd fetch failed (${attempt.label}):`, e.message);
+            for (let round = 1; round <= 3; round++) {
+                for (const attempt of attempts) {
+                    try {
+                        const html = await fetchTextWithTimeout(allOriginsUrl, attempt.timeoutMs);
+                        if (html && html.length > 1000) return html;
+                        lastError = new Error('empty response');
+                    } catch (e) {
+                        lastError = e;
+                        console.log(`Proxy Letterboxd fetch failed (${attempt.label}, round ${round}/3):`, e.message);
+                        // If AllOrigins is returning a gateway/timeout, give it a short breather and retry.
+                        if (String(e?.message || '').includes('HTTP 522') || String(e?.message || '').includes('HTTP 5')) {
+                            await sleep(400 * round);
+                        }
+                    }
                 }
             }
 
